@@ -1,3 +1,6 @@
+// Copyright 2026 Pifto Works
+// SPDX-License-Identifier: GPL-2.0-or-later
+//
 // Layer report for LayerHUD
 // ---------------------------------------------------------------------------
 // Lets the keyboard tell the host which layers are active, so the HUD does not

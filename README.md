@@ -94,6 +94,13 @@ held right now and records nothing.
   exact tracking.
 - Labels assume a US keyboard layout in the operating system.
 
+## License
+
+LayerHUD is released under the [GNU General Public License v3.0](LICENSE).
+The firmware add-on in [`firmware/`](firmware/) is released under the
+[GNU General Public License v2.0 or later](firmware/LICENSE), the same terms as QMK,
+so it can be built into any QMK, VIA or Vial firmware.
+
 ---
 
 ## 日本語
@@ -116,3 +123,10 @@ held right now and records nothing.
 - Vial（デスクトップ版）の起動中は通信を止め、閉じるとキー配列を読み直します。
   ブラウザで動く設定ツール（Vial / VIA / Remap）で編集するときは、タスクトレイのメニューから「一時停止」を選び、
   編集が終わったら「キー配列を読み直す」を選んでください。
+
+## ライセンス
+
+LayerHUD は [GNU General Public License v3.0](LICENSE) で公開しています。
+[`firmware/`](firmware/) のファームウェア用の追加部品は、QMK と同じ
+[GNU General Public License v2.0 以降](firmware/LICENSE) です。QMK / VIA / Vial の
+ファームウェアにそのまま組み込めます。
