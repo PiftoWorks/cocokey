@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LayerHUD</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div id="hud">
+      <header id="bar" data-tauri-drag-region>
+        <div id="layer-badge" data-tauri-drag-region>
+          <span id="layer-num">–</span>
+          <span id="layer-name" title=""></span>
+        </div>
+        <div id="chips"></div>
+        <div id="warn" hidden></div>
+        <div id="status" data-tauri-drag-region></div>
+        <div id="tools">
+          <button id="btn-pin" class="tool" title=""></button>
+          <button id="btn-macros" class="tool" title="">M</button>
+          <button id="btn-switch" class="tool" title=""></button>
+          <button id="btn-menu" class="tool" title="">⋯</button>
+        </div>
+      </header>
+      <div id="edit-banner" hidden></div>
+      <main id="stage">
+        <div id="board-area">
+          <div id="board-wrap"><svg id="board" xmlns="http://www.w3.org/2000/svg"></svg></div>
+          <div id="zoom">
+            <button data-zoom="in" title="">+</button>
+            <button data-zoom="out" title="">−</button>
+            <button data-zoom="fit" title="">⤢</button>
+          </div>
+        </div>
+        <aside id="switches"></aside>
+        <section id="macro-view" hidden></section>
+        <div id="empty"></div>
+      </main>
+      <div id="menu" hidden></div>
+      <div id="grip" title=""></div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

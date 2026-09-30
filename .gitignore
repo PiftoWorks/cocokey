@@ -1,0 +1,19 @@
+# build output
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+
+# local notes (not part of the project)
+LOCAL.md
+
+# personal keymaps and dumps
+*.vil
+*.local.json
+
+# editor / OS
+.vscode/
+.idea/
+*.log
+Thumbs.db
+.DS_Store
