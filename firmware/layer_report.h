@@ -1,7 +1,7 @@
 // Copyright 2026 Pifto Works
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
-// Layer report for LayerHUD
+// Layer report for CoCoKey
 // ---------------------------------------------------------------------------
 // Lets the keyboard tell the host which layers are active, so the HUD does not
 // have to work it out from key presses. Works with VIA and Vial firmware.
@@ -51,7 +51,7 @@ static inline void layer_report_fill(uint8_t *buf, uint8_t kind, layer_state_t s
 }
 
 // Call first thing in raw_hid_receive_kb(). Returns true if the report was
-// for LayerHUD; the reply is written into `data` and sent back by VIA/Vial.
+// for CoCoKey; the reply is written into `data` and sent back by VIA/Vial.
 static inline bool layer_report_handle(uint8_t *data, uint8_t length) {
     if (length < 13 || data[0] != LAYER_REPORT_ID || data[1] != 'L' || data[2] != 'H' || data[3] != 0x00) {
         return false;

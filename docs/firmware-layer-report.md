@@ -1,6 +1,6 @@
 # Reporting the layer state from the firmware
 
-Out of the box LayerHUD follows the active layer by watching the switch matrix
+Out of the box CoCoKey follows the active layer by watching the switch matrix
 and replaying the layer keys it finds in your keymap (`MO`, `TO`, `TG`, `OSL`,
 `TT`, `LT`, `DF`, tap dances). That works with any unmodified Vial keyboard,
 but it is a replay: timing-sensitive features (tap-hold decisions, combos,

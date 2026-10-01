@@ -23,27 +23,52 @@ const UNLOCK_CHECK: Duration = Duration::from_secs(2);
 const APP_CHECK: Duration = Duration::from_secs(2);
 
 /// Keyboards whose firmware turns on a mouse layer by itself when the
-/// built-in pointing device moves.
-fn auto_mouse_for(vendor_id: u16, product_id: u16, layers: usize, tapping_term: u16) -> Option<AutoMouse> {
-    match (vendor_id, product_id) {
-        // Svalboard: the last layer, until a key outside it is pressed.
-        (0x303A, 0x4044) => Some(AutoMouse { layer: (layers - 1) as u8, rules: AutoMouseRules::UntilUnmappedKey }),
-        // mtk64erp: QMK auto mouse on layer 7 with the keyboard's defaults
-        // (AUTO_MOUSE_TIME 1000, AUTO_MOUSE_THRESHOLD 100). The firmware
-        // switches it off while layers 1-6 are on top. The timeout can be
-        // changed on the keyboard (AM_TOUT_INC / DEC), which is not readable
-        // over VIA, so the default is assumed.
-        (0x4D59, 0x0300) if layers > 7 => Some(AutoMouse {
-            layer: 7,
+/// built-in pointing device moves, and whether it does so out of the box.
+///
+/// The values come from each keyboard's stock VIA / Vial firmware. Most of
+/// them let the user switch the feature and change the timeout on the
+/// keyboard (stored in EEPROM, not readable over VIA), so the HUD has a
+/// per-keyboard switch and otherwise assumes the defaults.
+fn auto_mouse_for(vendor_id: u16, product_id: u16, layers: usize, tapping_term: u16) -> Option<(AutoMouse, bool)> {
+    let qmk = |layer: u8, threshold: i32, timeout_ms: u64, blocked_layers: u32, mouse_keys: &'static [(u16, u16)]| {
+        ((layer as usize) < layers).then_some(AutoMouse {
+            layer,
             rules: AutoMouseRules::Qmk(QmkAutoMouse {
-                threshold: 100,
-                timeout: Duration::from_millis(1000),
+                threshold,
+                timeout: Duration::from_millis(timeout_ms),
                 delay: Duration::from_millis(tapping_term as u64),
-                blocked_layers: 0b0111_1110,
+                blocked_layers,
+                mouse_keys,
             }),
-        }),
-        _ => None,
-    }
+        })
+    };
+    let (am, on_by_default) = match (vendor_id, product_id) {
+        // Svalboard: the last layer, until a key outside it is pressed.
+        (0x303A, 0x4044) => {
+            (Some(AutoMouse { layer: (layers - 1) as u8, rules: AutoMouseRules::UntilUnmappedKey }), true)
+        }
+        // mtk64erp: layer 7, 1000 ms, threshold 100. The firmware switches the
+        // feature off while layers 1-6 are on top.
+        (0x4D59, 0x0300) => (qmk(7, 100, 1000, 0b0111_1110, &[]), true),
+        // Keyball 46 / 61 / 39 / 44 / plus (QMK 0.22: no threshold). Off until
+        // the user turns it on with AML_TO. SCRL_MO counts as a mouse key.
+        (0x5957, 0x0100) => (qmk(2, 0, 650, 0, &[(0x7E07, 0x7E07)]), false),
+        (0x5957, 0x0001 | 0x0200 | 0x0400 | 0x0500) => (qmk(1, 0, 650, 0, &[(0x7E07, 0x7E07)]), false),
+        // cocot36plus / cocot38mini / cocot_micro (Vial, no threshold): on by
+        // default; layers 1-2 (scroll) switch it off. SCRL_MO is a mouse key.
+        (0x1727, 0x0014 | 0x0011) => (qmk(4, 0, 650, 0b110, &[(0x7E04, 0x7E04)]), true),
+        (0x1727, 0x0013) => (qmk(4, 0, 650, 0b110, &[]), true),
+        // Bastard Keyboards Charybdis / Dilemma (threshold 10). Off until
+        // turned on in Argos. Its pointer mode keys count as mouse keys.
+        (0xA8F8, 0x1832 | 0x1836) => (qmk(4, 10, 650, 0, &[(0x7E00, 0x7E20)]), false),
+        (0xA8F8, 0x1833 | 0x1834 | 0x1837) => (qmk(3, 10, 650, 0, &[(0x7E00, 0x7E20)]), false),
+        (0xA8F8, 0x1835) => (qmk(2, 10, 650, 0, &[(0x7E00, 0x7E20)]), false),
+        // torabo-tsuki (Vial): off by default, layer 1, 100 ms, threshold 10.
+        // KC_NO and modifiers count as mouse keys.
+        (0xFEED, 0xBCAD) => (qmk(1, 10, 100, 0, &[(0x0000, 0x0000), (0x00E0, 0x00E7)]), false),
+        _ => return None,
+    };
+    am.map(|am| (am, on_by_default))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -63,6 +88,8 @@ pub struct KeyboardInfo {
     pub matrix_available: bool,
     pub firmware_reports: bool,
     pub auto_mouse_layer: Option<u8>,
+    /// Whether the keyboard's firmware has the mouse layer on out of the box.
+    pub auto_mouse_default: bool,
     pub legacy_keycodes: bool,
     /// Raw dynamic macro buffer (see `src/macros.ts` for the format).
     pub macro_buffer: Vec<u8>,
@@ -97,7 +124,9 @@ pub enum Control {
     Reload,
     Reset,
     SetPaused(bool),
-    PointerMoved(i32, i32),
+    PointerMoved(i32, i32, i32),
+    /// The user switched the keyboard's automatic mouse layer on or off.
+    SetAutoMouse(bool),
     Select(Option<String>),
     /// A definition file was dropped on the window.
     Import(std::path::PathBuf),
@@ -117,6 +146,8 @@ struct Connection {
     errors: u32,
     firmware: Option<(u32, u32)>,
     last_unlock_check: Option<Instant>,
+    /// Mouse layer rules for this keyboard (used when the user enables it).
+    auto_mouse: Option<AutoMouse>,
 }
 
 pub fn spawn(app: AppHandle, shared: Arc<Mutex<Shared>>, pointer_target: Target) -> Sender<Control> {
@@ -223,9 +254,9 @@ impl Worker {
                         self.last_attempt = None;
                     }
                 }
-                Ok(Control::PointerMoved(dx, dy)) => {
+                Ok(Control::PointerMoved(dx, dy, dw)) => {
                     if let Some(c) = self.conn.as_mut() {
-                        c.engine.pointer_moved(dx, dy, now);
+                        c.engine.pointer_moved(dx, dy, dw, now);
                     }
                 }
                 Ok(Control::Import(path)) => {
@@ -240,6 +271,11 @@ impl Worker {
                     if result.is_ok() {
                         self.disconnect();
                         self.last_attempt = None;
+                    }
+                }
+                Ok(Control::SetAutoMouse(on)) => {
+                    if let Some(c) = self.conn.as_mut() {
+                        c.engine.set_auto_mouse(c.auto_mouse.filter(|_| on));
                     }
                 }
                 Ok(Control::IgnoreConfigurators(on)) => {
@@ -572,14 +608,16 @@ fn load(api: &HidApi, d: &DeviceInfo, store: &Store) -> Result<Connection, LoadE
     let ignored = if matrix_available { first_matrix.unwrap_or_default() } else { vec![0; rows] };
     let firmware = raw.subscribe_layer_reports();
     let auto_mouse = auto_mouse_for(d.vendor_id, d.product_id, layers, tapping_term);
-    let auto_mouse_layer = auto_mouse.map(|am| am.layer);
+    let auto_mouse_layer = auto_mouse.map(|(am, _)| am.layer);
+    let auto_mouse_default = auto_mouse.is_some_and(|(_, on)| on);
+    let auto_mouse = auto_mouse.map(|(am, _)| am);
     let id = match vial {
         Some((_, uid)) => uid.iter().map(|b| format!("{b:02x}")).collect(),
         None => format!("{:04x}:{:04x}", d.vendor_id, d.product_id),
     };
 
     let mut engine = Engine::new(keymap.clone(), tap_dances.clone(), tapping_term);
-    engine.set_auto_mouse(auto_mouse);
+    engine.set_auto_mouse(auto_mouse.filter(|_| auto_mouse_default));
     if let Some(r) = firmware {
         engine.sync_from_firmware(r.layer_state, r.default_layer);
     }
@@ -598,6 +636,7 @@ fn load(api: &HidApi, d: &DeviceInfo, store: &Store) -> Result<Connection, LoadE
         matrix_available,
         firmware_reports: firmware.is_some(),
         auto_mouse_layer,
+        auto_mouse_default,
         legacy_keycodes,
         macro_buffer,
         macro_count,
@@ -612,5 +651,6 @@ fn load(api: &HidApi, d: &DeviceInfo, store: &Store) -> Result<Connection, LoadE
         errors: 0,
         firmware: firmware.map(|r| (r.layer_state, r.default_layer)),
         last_unlock_check: None,
+        auto_mouse,
     })
 }

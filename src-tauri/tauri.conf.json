@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "LayerHUD",
+  "productName": "CoCoKey",
   "version": "0.1.0",
-  "identifier": "app.layerhud.desktop",
+  "identifier": "com.piftoworks.cocokey",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "LayerHUD",
+        "title": "CoCoKey",
         "width": 1000,
         "height": 400,
         "minWidth": 320,

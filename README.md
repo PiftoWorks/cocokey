@@ -1,4 +1,6 @@
-# LayerHUD
+# CoCoKey
+
+A layer HUD for your QMK / VIA / Vial keyboard.
 
 An always-on-top overlay that shows which layer your keyboard is on, what
 every key does on that layer, and how to get to the other layers.
@@ -20,7 +22,9 @@ configure: plug in a Vial or VIA keyboard and the HUD draws it.
 - **Pressed keys** light up; keys that fall through to a lower layer are shown
   dimmed.
 - **Mouse layers** — keyboards that jump to a mouse layer when their built-in
-  trackball or trackpoint moves (Svalboard) are followed too.
+  trackball or trackpoint moves are followed too: Svalboard, Keyball, cocot,
+  Charybdis / Dilemma, torabo-tsuki and mtk64erp. Where the keyboard ships with
+  the feature off, switch it on for that keyboard in the menu.
 - Resize by dragging any edge or corner, move by dragging the top bar,
   adjustable opacity, click-through mode, per-keyboard layer names.
 
@@ -38,7 +42,7 @@ configure: plug in a Vial or VIA keyboard and the HUD draws it.
 
 ## Usage
 
-Start LayerHUD and connect the keyboard; it is picked up automatically.
+Start CoCoKey and connect the keyboard; it is picked up automatically.
 
 | Action | How |
 |---|---|
@@ -52,8 +56,8 @@ Start LayerHUD and connect the keyboard; it is picked up automatically.
 | Settings | `⋯` button |
 | Click-through, pause, reload, quit | tray icon menu |
 
-Vial and LayerHUD share the same USB interface, and every reply on it reaches
-every program that has it open. LayerHUD therefore stops talking to the
+Vial and CoCoKey share the same USB interface, and every reply on it reaches
+every program that has it open. CoCoKey therefore stops talking to the
 keyboard while the Vial or VIA desktop app is running and reloads the keymap
 when it closes. If you use a web configurator (Vial web, VIA web, Remap), choose **Pause**
 from the tray menu before editing and **Reload keymap** afterwards; browsers
@@ -74,7 +78,7 @@ Requires Node.js 20+, Rust 1.85+ and the
 
 ## How it works
 
-LayerHUD talks to the keyboard over the VIA raw HID interface
+CoCoKey talks to the keyboard over the VIA raw HID interface
 (usage page `0xFF60`):
 
 1. reads the layer count, the keymap, the tap dance table and the tapping term;
@@ -84,7 +88,7 @@ LayerHUD talks to the keyboard over the VIA raw HID interface
    keycodes with the same rules QMK/Vial use.
 
 Nothing is written to the keyboard. To tell which keyboard you typed on last,
-LayerHUD listens to raw keyboard input; it only keeps the set of keys that are
+CoCoKey listens to raw keyboard input; it only keeps the set of keys that are
 held right now and records nothing.
 
 ## Limitations
@@ -96,7 +100,7 @@ held right now and records nothing.
 
 ## License
 
-LayerHUD is released under the [GNU General Public License v3.0](LICENSE).
+CoCoKey is released under the [GNU General Public License v3.0](LICENSE).
 The firmware add-on in [`firmware/`](firmware/) is released under the
 [GNU General Public License v2.0 or later](firmware/LICENSE), the same terms as QMK,
 so it can be built into any QMK, VIA or Vial firmware.
@@ -105,7 +109,7 @@ so it can be built into any QMK, VIA or Vial firmware.
 
 ## 日本語
 
-キーボードがいまどのレイヤーにいるか、そのレイヤーで各キーが何をするか、
+CoCoKey（ココキー）は、キーボードがいまどのレイヤーにいるか、そのレイヤーで各キーが何をするか、
 ほかのレイヤーへの切り替え方を、常に手前に表示するオーバーレイです。
 
 - Vial 対応キーボードをつなぐだけで、キー配列と物理配置を本体から読み込みます。
@@ -116,8 +120,10 @@ so it can be built into any QMK, VIA or Vial firmware.
 - キーの押下からレイヤーの切り替え（MO / TO / TG / OSL / TT / LT / DF /
   タップダンス）を追跡します。ファームウェアに[小さな追加](docs/firmware-layer-report.md)
   をすると、キーボードから正確なレイヤーを受け取れます。
-- Svalboard は指ごとのクラスタ配置で表示し、トラックボールを動かしたときの
-  マウスレイヤーにも追従します。
+- Svalboard は指ごとのクラスタ配置で表示します。
+- トラックボールを動かすとマウスレイヤーに切り替わるキーボード（Svalboard・Keyball・
+  cocot・Charybdis / Dilemma・torabo-tsuki・mtk64erp）は、その切り替わりにも追従します。
+  キーボード側の初期設定でこの機能がオフの機種は、メニューでオンにしてください。
 - 上部をドラッグで移動、縁や角のドラッグで拡大縮小。不透明度、クリック透過、
   レイヤー名の変更に対応しています。
 - Vial（デスクトップ版）の起動中は通信を止め、閉じるとキー配列を読み直します。
@@ -126,7 +132,7 @@ so it can be built into any QMK, VIA or Vial firmware.
 
 ## ライセンス
 
-LayerHUD は [GNU General Public License v3.0](LICENSE) で公開しています。
+CoCoKey は [GNU General Public License v3.0](LICENSE) で公開しています。
 [`firmware/`](firmware/) のファームウェア用の追加部品は、QMK と同じ
 [GNU General Public License v2.0 以降](firmware/LICENSE) です。QMK / VIA / Vial の
 ファームウェアにそのまま組み込めます。

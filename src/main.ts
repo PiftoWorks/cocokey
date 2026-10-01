@@ -31,6 +31,8 @@ interface KeyboardInfo {
   matrixAvailable: boolean;
   firmwareReports: boolean;
   autoMouseLayer: number | null;
+  /** Whether the firmware has the mouse layer on out of the box. */
+  autoMouseDefault?: boolean;
   legacyKeycodes: boolean;
   macroBuffer: number[];
   macroCount: number;
@@ -76,10 +78,22 @@ let editingParts = false;
 
 // ---------------------------------------------------------------- settings
 
+// Settings saved before the app was renamed: move them over once.
+try {
+  for (const k of Object.keys(localStorage)) {
+    if (!k.startsWith("layerhud.")) continue;
+    const renamed = "cocokey." + k.slice("layerhud.".length);
+    if (localStorage.getItem(renamed) === null) localStorage.setItem(renamed, localStorage.getItem(k)!);
+    localStorage.removeItem(k);
+  }
+} catch {
+  /* storage unavailable */
+}
+
 const store = {
   get<T>(key: string, fallback: T): T {
     try {
-      const v = localStorage.getItem("layerhud." + key);
+      const v = localStorage.getItem("cocokey." + key);
       return v === null ? fallback : (JSON.parse(v) as T);
     } catch {
       return fallback;
@@ -87,7 +101,7 @@ const store = {
   },
   set(key: string, value: unknown) {
     try {
-      localStorage.setItem("layerhud." + key, JSON.stringify(value));
+      localStorage.setItem("cocokey." + key, JSON.stringify(value));
     } catch {
       /* storage unavailable: settings just won't persist */
     }
@@ -110,6 +124,8 @@ const KEY_MIN = 14;
 const KEY_MAX = 400;
 let keysOnly = store.get("keysOnly", false);
 let ignoreConfigurators = store.get("ignoreConfigurators", false);
+/** Follow the current keyboard's trackball mouse layer (per keyboard). */
+let autoMouse = false;
 /** Width / height of the board currently drawn, and its height in key units. */
 let boardAspect = 3;
 let boardUnits = 7;
@@ -296,7 +312,7 @@ function render() {
   for (let l = 0; l < kb.layers; l++) {
     const on = (mask & (1 << l)) !== 0;
     if (!layerUsed(l) && !on) continue;
-    const cls = ["chip", on ? "on" : "", l === shown ? "top" : "", (defaultMask() & (1 << l)) ? "default" : ""].join(" ");
+    const cls = ["chip", `lc-${l % 8}`, on ? "on" : "", l === shown ? "top" : "", (defaultMask() & (1 << l)) ? "default" : ""].join(" ");
     chips.push(`<button class="${cls}" data-layer="${l}" title="${layerTitle(l)}">${l}</button>`);
   }
   $("chips").innerHTML = chips.join("");
@@ -377,7 +393,7 @@ function render() {
   }
   entries.sort((a, b) => Number(b.home) - Number(a.home) || a.first - b.first);
   const rows = entries.map(
-    (e) => `<li class="${e.home ? "home" : ""}"><span class="where">${escapeHtml(e.name)}</span>${e.parts.map((p) => `<span class="act">${p}</span>`).join("")}</li>`,
+    (e) => `<li class="${e.home ? "home" : ""}"><span class="where">${escapeHtml(e.name.replace(/^\[(.+)\]$/, "$1"))}</span>${e.parts.map((p) => `<span class="act">${p}</span>`).join("")}</li>`,
   );
   const macroRows = [...macroKeys.entries()]
     .sort((a, b) => a[0] - b[0])
@@ -436,6 +452,8 @@ function setKeyboard(info: KeyboardInfo | null) {
   names = store.get(`names.${info.id}`, {} as Record<string, string>);
   parts = store.get(`parts.${info.id}`, {} as Record<string, Part>);
   keyPx = store.get(`keyPx.${info.id}`, 0);
+  autoMouse = info.autoMouseLayer != null && store.get(`autoMouse.${info.id}`, info.autoMouseDefault ?? true);
+  if (!cached && info.autoMouseLayer != null) invoke("set_auto_mouse", { enabled: autoMouse });
   schedule();
 }
 
@@ -446,32 +464,51 @@ function buildMenu() {
   const deviceOptions = devices
     .map((d) => `<option value="${escapeHtml(d.path)}" ${kb?.device.path === d.path ? "selected" : ""}>${escapeHtml(d.product || d.path)}</option>`)
     .join("");
+  const hint = (key?: string) => (key ? `<span class="hint">${t(key)}</span>` : "");
+  const sec = (key: string) => `<div class="sec">${t(key)}</div>`;
+  const field = (label: string, control: string) => `<label class="row"><span class="lbl">${label}</span>${control}</label>`;
+  const toggle = (id: string, on: boolean, label: string, hintKey?: string, title?: string) =>
+    `<label class="row"${title ? ` title="${escapeHtml(title)}"` : ""}><span class="lbl">${label}${hint(hintKey)}</span>` +
+    `<input id="${id}" class="sw" type="checkbox" ${on ? "checked" : ""}></label>`;
+  const item = (act: string, label: string, hintKey?: string, disabled = false) =>
+    `<button data-act="${act}" ${disabled ? "disabled" : ""}><span class="lbl">${label}${hint(hintKey)}</span></button>`;
   menu.innerHTML = `
-    <label class="row">${t("menu.display")}<select id="m-display">
+    ${sec("sec.view")}
+    ${field(t("menu.display"), `<select id="m-display">
       <option value="auto" ${displayMode === "auto" ? "selected" : ""}>${t("menu.display.auto")}</option>
       <option value="tracked" ${displayMode === "tracked" ? "selected" : ""}>${t("menu.display.tracked")}</option>
       <option value="standard" ${displayMode === "standard" ? "selected" : ""}>${t("menu.display.standard")}</option>
-    </select></label>
-    <label class="row">${t("menu.standard")}<select id="m-standard">
+    </select>`)}
+    ${field(t("menu.standard"), `<select id="m-standard">
       <option value="us" ${standardKind === "us" ? "selected" : ""}>${t("std.us")}</option>
       <option value="jis" ${standardKind === "jis" ? "selected" : ""}>${t("std.jis")}</option>
-    </select></label>
-    <label class="row">${t("menu.keyOpacity")}<input id="m-keys" type="range" min="0.1" max="1" step="0.01" value="${keyOpacity}"></label>
-    <label class="row"><input id="m-clear" type="checkbox" ${clearBackground ? "checked" : ""}>${t("menu.clear")}</label>
-    <label class="row">${t("menu.opacity")}<input id="m-opacity" type="range" min="0" max="1" step="0.01" value="${opacity}" ${clearBackground ? "disabled" : ""}></label>
-    <label class="row"><input id="m-switches" type="checkbox" ${showSwitches ? "checked" : ""}>${t("menu.layerNames")}</label>
-    <label class="row"><input id="m-keysonly" type="checkbox" ${keysOnly ? "checked" : ""}>${t("menu.keysOnly")}</label>
-    <label class="row" title="${escapeHtml(t("menu.ignoreVialNote"))}"><input id="m-ignore" type="checkbox" ${ignoreConfigurators ? "checked" : ""}>${t("menu.ignoreVial")}</label>
-    <label class="row"><input id="m-pause" type="checkbox" ${st.paused ? "checked" : ""}>${t("menu.pause")}</label>
-    ${devices.length > 1 ? `<label class="row">${t("menu.device")}<select id="m-device">${deviceOptions}</select></label>` : ""}
-    <button data-act="fit">${t("menu.fit")}</button>
-    <button data-act="parts">${editingParts ? t("parts.done") : t("menu.parts")}</button>
-    <button data-act="rename">${t("menu.names")}</button>
-    <button data-act="follow" ${preview === null ? "disabled" : ""}>${t("menu.follow")}</button>
-    <button data-act="reload">${t("menu.reload")}</button>
-    <button data-act="reset">${t("menu.reset")}</button>
-    <button data-act="click">${t("menu.click")}</button>
-    <button data-act="hide">${t("menu.hide")}</button>`;
+    </select>`)}
+    ${field(t("menu.keyOpacity"), `<input id="m-keys" type="range" min="0.1" max="1" step="0.01" value="${keyOpacity}">`)}
+    ${field(t("menu.opacity"), `<input id="m-opacity" type="range" min="0" max="1" step="0.01" value="${opacity}" ${clearBackground ? "disabled" : ""}>`)}
+    ${toggle("m-clear", clearBackground, t("menu.clear"))}
+    ${toggle("m-switches", showSwitches, t("menu.layerNames"))}
+    ${toggle("m-keysonly", keysOnly, t("menu.keysOnly"), "hint.keysOnly")}
+    ${sec("sec.track")}
+    ${devices.length > 1 ? field(t("menu.device"), `<select id="m-device">${deviceOptions}</select>`) : ""}
+    ${kb?.autoMouseLayer != null ? toggle("m-automouse", autoMouse, t("menu.autoMouse"), "hint.autoMouse", t("menu.autoMouseNote")) : ""}
+    ${toggle("m-ignore", ignoreConfigurators, t("menu.ignoreVial"), "hint.ignoreVial", t("menu.ignoreVialNote"))}
+    ${toggle("m-pause", st.paused, t("menu.pause"), "hint.pause")}
+    ${sec("sec.actions")}
+    ${item("rename", t("menu.names"))}
+    ${item("parts", editingParts ? t("parts.done") : t("menu.parts"), editingParts ? undefined : "hint.parts")}
+    ${item("follow", t("menu.follow"), undefined, preview === null)}
+    ${item("reload", t("menu.reload"))}
+    ${item("reset", t("menu.reset"))}
+    ${sec("sec.window")}
+    ${item("fit", t("menu.fit"))}
+    ${item("click", t("menu.click"), "hint.click")}
+    ${item("hide", t("menu.hide"), "hint.hide")}`;
+  // Filled part of the sliders.
+  for (const r of menu.querySelectorAll<HTMLInputElement>('input[type="range"]')) {
+    const fill = () => r.style.setProperty("--val", `${((+r.value - +r.min) / (+r.max - +r.min)) * 100}%`);
+    fill();
+    r.addEventListener("input", fill);
+  }
   ($("m-display") as HTMLSelectElement).onchange = (e) => {
     displayMode = (e.target as HTMLSelectElement).value as typeof displayMode;
     store.set("displayMode", displayMode);
@@ -502,6 +539,12 @@ function buildMenu() {
     ignoreConfigurators = (e.target as HTMLInputElement).checked;
     store.set("ignoreConfigurators", ignoreConfigurators);
     invoke("set_ignore_configurators", { ignore: ignoreConfigurators });
+  };
+  const am = document.getElementById("m-automouse") as HTMLInputElement | null;
+  if (am) am.onchange = () => {
+    autoMouse = am.checked;
+    if (kb) store.set(`autoMouse.${kb.id}`, autoMouse);
+    invoke("set_auto_mouse", { enabled: autoMouse });
   };
   ($("m-keysonly") as HTMLInputElement).onchange = (e) => {
     keysOnly = (e.target as HTMLInputElement).checked;
@@ -764,12 +807,17 @@ function startRename() {
 // ---------------------------------------------------------------- wiring
 
 function wire() {
-  $("btn-switch").textContent = "☰";
+  $("btn-switch").innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M3.5 14.5h17"/></svg>';
+  $("btn-menu").innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h8M16 7h4M4 17h4M12 17h8"/><circle cx="14" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>';
+  $("btn-macros").innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h11M4 11h11M4 16h6"/><path d="M15 14v6l5-3z"/></svg>';
+  for (const z of ["in", "out", "fit"] as const) {
+    const icon = { in: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6v12M6 12h12"/></svg>', out: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 12h12"/></svg>', fit: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>' }[z];
+    $("zoom").querySelector(`[data-zoom="${z}"]`)!.innerHTML = icon;
+  }
   $("btn-switch").title = t("tip.switch");
   $("btn-menu").title = t("tip.menu");
   $("btn-macros").title = t("tip.macros");
-  $("btn-pin").innerHTML =
-    '<svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><path d="M16 3l5 5-2 1-3 3 .5 5.5L15 19l-4-4-5 5-1-1 5-5-4-4 1.5-1.5L13 9l3-3z"/></svg>';
+  $("btn-pin").innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4h6l-1 5 3 3v2H7v-2l3-3z"/><path d="M12 14v6"/></svg>';
   $("btn-pin").onclick = () => {
     alwaysOnTop = !alwaysOnTop;
     store.set("alwaysOnTop", alwaysOnTop);

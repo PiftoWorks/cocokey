@@ -74,6 +74,11 @@ fn set_ignore_configurators(app: AppHandle, ignore: bool) {
 }
 
 #[tauri::command]
+fn set_auto_mouse(app: AppHandle, enabled: bool) {
+    send(&app, Control::SetAutoMouse(enabled));
+}
+
+#[tauri::command]
 fn import_definition(app: AppHandle, path: String) {
     send(&app, Control::Import(path.into()));
 }
@@ -117,7 +122,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 
     let click_item = click.clone();
     let mut builder = TrayIconBuilder::with_id("main")
-        .tooltip("LayerHUD")
+        .tooltip("CoCoKey")
         .menu(&menu)
         .show_menu_on_left_click(true)
         .on_menu_event(move |app, event| match event.id.as_ref() {
@@ -171,8 +176,8 @@ pub fn run() {
             pointer::spawn(
                 target,
                 Box::new(move |event| match event {
-                    pointer::RawEvent::PointerMoved(dx, dy) => {
-                        let _ = pointer_tx.send(Control::PointerMoved(dx, dy));
+                    pointer::RawEvent::PointerMoved(dx, dy, dw) => {
+                        let _ = pointer_tx.send(Control::PointerMoved(dx, dy, dw));
                     }
                     pointer::RawEvent::TypingOn(tracked) => {
                         let _ = emitter.emit("hud://typing", tracked);
@@ -194,11 +199,12 @@ pub fn run() {
             reload,
             reset_layers,
             set_paused,
+            set_auto_mouse,
             select_device,
             import_definition,
             set_ignore_configurators,
             set_click_through
         ])
         .run(tauri::generate_context!())
-        .expect("error while running LayerHUD");
+        .expect("error while running CoCoKey");
 }

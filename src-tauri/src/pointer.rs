@@ -24,9 +24,10 @@ pub type Target = Arc<Mutex<Option<TargetInfo>>>;
 
 #[derive(Debug, Clone)]
 pub enum RawEvent {
-    /// The tracked keyboard's pointing device moved by (x, y) counts since
-    /// the previous event (wheel-only movement reports 0, 0).
-    PointerMoved(i32, i32),
+    /// The tracked keyboard's pointing device moved by (x, y) counts and
+    /// scrolled by this many wheel steps (both wheels, absolute) since the
+    /// previous event.
+    PointerMoved(i32, i32, i32),
     /// The keyboard typed on last changed (`true` = the tracked keyboard).
     TypingOn(bool),
     /// Scan codes held on other keyboards (0xE0 prefix folded into the high byte).
@@ -78,8 +79,9 @@ mod imp {
         sink: Box<dyn Fn(RawEvent) + Send>,
         names: HashMap<isize, String>,
         last_move: Option<Instant>,
-        /// Movement not reported yet (events are sent at most every few ms).
-        pending_move: (i32, i32),
+        /// Movement not reported yet (events are sent at most every few ms):
+        /// x, y and wheel steps.
+        pending_move: (i32, i32, i32),
         typing_on_target: Option<bool>,
         held: BTreeSet<u16>,
     }
@@ -92,7 +94,7 @@ mod imp {
             sink,
             names: HashMap::new(),
             last_move: None,
-            pending_move: (0, 0),
+            pending_move: (0, 0, 0),
             typing_on_target: None,
             held: BTreeSet::new(),
         }));
@@ -101,13 +103,13 @@ mod imp {
             let class = WNDCLASSW {
                 lpfnWndProc: Some(wndproc),
                 hInstance: hinstance.into(),
-                lpszClassName: w!("LayerHudRawInput"),
+                lpszClassName: w!("CoCoKeyRawInput"),
                 ..Default::default()
             };
             RegisterClassW(&class);
             let hwnd = CreateWindowExW(
                 WINDOW_EX_STYLE(0),
-                w!("LayerHudRawInput"),
+                w!("CoCoKeyRawInput"),
                 w!(""),
                 WINDOW_STYLE(0),
                 0,
@@ -192,13 +194,18 @@ mod imp {
             // Relative counts, as the firmware sees them (auto mouse thresholds).
             ctx.pending_move.0 += mouse.lLastX;
             ctx.pending_move.1 += mouse.lLastY;
+            if flags & (RI_MOUSE_WHEEL | RI_MOUSE_HWHEEL) != 0 {
+                // 120 per detent; firmware wheel reports are one step each.
+                let delta = (mouse.Anonymous.Anonymous.usButtonData as i16 as i32).abs();
+                ctx.pending_move.2 += (delta / 120).max(1);
+            }
             let now = Instant::now();
             if ctx.last_move.is_some_and(|t| now.duration_since(t) < Duration::from_millis(8)) {
                 return;
             }
             ctx.last_move = Some(now);
-            let (dx, dy) = std::mem::take(&mut ctx.pending_move);
-            (ctx.sink)(RawEvent::PointerMoved(dx, dy));
+            let (dx, dy, dw) = std::mem::take(&mut ctx.pending_move);
+            (ctx.sink)(RawEvent::PointerMoved(dx, dy, dw));
             return;
         }
 

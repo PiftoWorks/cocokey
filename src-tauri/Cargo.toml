@@ -1,12 +1,12 @@
 [package]
-name = "layer-hud"
+name = "cocokey"
 version = "0.1.0"
 description = "Always-on-top HUD that shows the active keyboard layer and its keymap"
 license = "GPL-3.0-only"
 edition = "2021"
 
 [lib]
-name = "layer_hud_lib"
+name = "cocokey_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

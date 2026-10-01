@@ -63,6 +63,7 @@ pub enum AutoMouseRules {
 #[derive(Debug, Clone, Copy)]
 pub struct QmkAutoMouse {
     /// Movement on one axis needed to turn the layer on (`AUTO_MOUSE_THRESHOLD`).
+    /// 0 = any movement (QMK before the threshold was added, around 0.24).
     pub threshold: i32,
     /// The layer goes off this long after the last movement (`AUTO_MOUSE_TIME`).
     pub timeout: Duration,
@@ -71,6 +72,8 @@ pub struct QmkAutoMouse {
     /// Layers that disable the feature while one of them is the highest layer
     /// (some keyboards do this in `layer_state_set_kb`).
     pub blocked_layers: u32,
+    /// Keycode ranges the keyboard adds as mouse keys (`is_mouse_record_kb`).
+    pub mouse_keys: &'static [(u16, u16)],
 }
 
 /// `AUTO_MOUSE_DEBOUNCE`: movement right after an activation is not counted.
@@ -133,8 +136,8 @@ pub struct Engine {
     auto_mouse: Option<AutoMouse>,
     auto_mouse_active: bool,
     last_move: Option<Instant>,
-    /// QMK auto mouse: movement summed since the last activation.
-    mouse_total: (i32, i32),
+    /// QMK auto mouse: movement (x, y, wheel steps) summed since the last activation.
+    mouse_total: (i32, i32, i32),
     /// QMK auto mouse: when the last non-mouse key went down or up.
     mouse_delay_from: Option<Instant>,
     mouse_keys: HashMap<(usize, usize), MouseKey>,
@@ -154,7 +157,7 @@ impl Engine {
             auto_mouse: None,
             auto_mouse_active: false,
             last_move: None,
-            mouse_total: (0, 0),
+            mouse_total: (0, 0, 0),
             mouse_delay_from: None,
             mouse_keys: HashMap::new(),
         }
@@ -188,7 +191,7 @@ impl Engine {
         self.pending_dances.clear();
         self.oneshot = None;
         self.auto_mouse_active = false;
-        self.mouse_total = (0, 0);
+        self.mouse_total = (0, 0, 0);
         self.mouse_delay_from = None;
         self.mouse_keys.clear();
     }
@@ -294,8 +297,9 @@ impl Engine {
         self.auto_mouse_active = true;
     }
 
-    /// The pointing device of the keyboard moved by (`dx`, `dy`) counts.
-    pub fn pointer_moved(&mut self, dx: i32, dy: i32, now: Instant) {
+    /// The pointing device of the keyboard moved by (`dx`, `dy`) counts and
+    /// scrolled `dw` wheel steps.
+    pub fn pointer_moved(&mut self, dx: i32, dy: i32, dw: i32, now: Instant) {
         let Some(am) = self.auto_mouse else { return };
         let q = match am.rules {
             AutoMouseRules::UntilUnmappedKey => {
@@ -313,11 +317,17 @@ impl Engine {
         {
             return;
         }
-        self.mouse_total.0 += dx;
-        self.mouse_total.1 += dy;
-        let moved = self.mouse_total.0.abs() > q.threshold || self.mouse_total.1.abs() > q.threshold;
+        let moved = if q.threshold == 0 {
+            dx != 0 || dy != 0 || dw != 0
+        } else {
+            self.mouse_total.0 += dx;
+            self.mouse_total.1 += dy;
+            self.mouse_total.2 += dw;
+            let (x, y, w) = self.mouse_total;
+            x.abs() > q.threshold || y.abs() > q.threshold || w > q.threshold
+        };
         if moved || self.mouse_buttons_held() {
-            self.mouse_total = (0, 0);
+            self.mouse_total = (0, 0, 0);
             self.last_move = Some(now);
             self.mouse_delay_from = None;
             if !self.auto_mouse_active {
@@ -361,6 +371,7 @@ impl Engine {
             return;
         }
         let kind = match kc {
+            _ if q.mouse_keys.iter().any(|&(lo, hi)| (lo..=hi).contains(&kc)) => Some(MouseKey::Button),
             // mouse keys (movement, buttons, wheel, acceleration)
             0x00CD..=0x00DF => Some(MouseKey::Button),
             // modifiers and modified keys are skipped
@@ -416,7 +427,7 @@ impl Engine {
             !self.mouse_buttons_held() && self.last_move.is_none_or(|t| now.duration_since(t) > q.timeout);
         if timed_out || self.qmk_blocked(layer, q) {
             self.auto_mouse_off();
-            self.mouse_total = (0, 0);
+            self.mouse_total = (0, 0, 0);
             self.last_move = None;
         }
     }
@@ -722,7 +733,7 @@ mod tests {
         let mut e = engine();
         e.set_auto_mouse(Some(AutoMouse { layer: 2, rules: AutoMouseRules::UntilUnmappedKey }));
         let t = Instant::now();
-        e.pointer_moved(1, 0, t);
+        e.pointer_moved(1, 0, 0, t);
         assert_eq!(e.top_layer(), 2);
         e.key_down(0, 3, ms(t, 50));
         assert_eq!(e.top_layer(), 0);
@@ -745,6 +756,7 @@ mod tests {
                 timeout: Duration::from_millis(1000),
                 delay: Duration::from_millis(200),
                 blocked_layers: 0b10,
+                mouse_keys: &[],
             }),
         }));
         e
@@ -754,9 +766,9 @@ mod tests {
     fn qmk_auto_mouse_needs_threshold_and_times_out() {
         let mut e = qmk_engine();
         let t = Instant::now();
-        e.pointer_moved(60, 0, t);
+        e.pointer_moved(60, 0, 0, t);
         assert_eq!(e.top_layer(), 0);
-        e.pointer_moved(50, 0, ms(t, 10));
+        e.pointer_moved(50, 0, 0, ms(t, 10));
         assert_eq!(e.top_layer(), 2);
         e.tick(ms(t, 900));
         assert_eq!(e.top_layer(), 2);
@@ -768,7 +780,7 @@ mod tests {
     fn qmk_auto_mouse_button_keeps_layer_other_key_leaves() {
         let mut e = qmk_engine();
         let t = Instant::now();
-        e.pointer_moved(0, -150, t);
+        e.pointer_moved(0, -150, 0, t);
         e.key_down(0, 1, ms(t, 100)); // mouse button
         e.tick(ms(t, 1500));
         assert_eq!(e.top_layer(), 2);
@@ -778,15 +790,32 @@ mod tests {
         e.tick(ms(t, 2600));
         assert_eq!(e.top_layer(), 0);
 
-        e.pointer_moved(150, 0, ms(t, 3000));
+        e.pointer_moved(150, 0, 0, ms(t, 3000));
         assert_eq!(e.top_layer(), 2);
         e.key_down(0, 2, ms(t, 3100)); // 'B'
         assert_eq!(e.top_layer(), 0);
         e.key_up(0, 2, ms(t, 3150));
         // movement right after typing is ignored
-        e.pointer_moved(150, 0, ms(t, 3250));
+        e.pointer_moved(150, 0, 0, ms(t, 3250));
         assert_eq!(e.top_layer(), 0);
-        e.pointer_moved(150, 0, ms(t, 3400));
+        e.pointer_moved(150, 0, 0, ms(t, 3400));
+        assert_eq!(e.top_layer(), 2);
+    }
+
+    #[test]
+    fn qmk_auto_mouse_without_threshold() {
+        let mut e = qmk_engine();
+        if let Some(AutoMouse { rules: AutoMouseRules::Qmk(q), .. }) = e.auto_mouse.as_mut() {
+            q.threshold = 0;
+        }
+        let t = Instant::now();
+        e.pointer_moved(0, 0, 1, t); // one wheel step
+        assert_eq!(e.top_layer(), 2);
+        e.tick(ms(t, 700));
+        assert_eq!(e.top_layer(), 2);
+        e.tick(ms(t, 1100));
+        assert_eq!(e.top_layer(), 0);
+        e.pointer_moved(1, 0, 0, ms(t, 1200));
         assert_eq!(e.top_layer(), 2);
     }
 
@@ -795,10 +824,10 @@ mod tests {
         let mut e = qmk_engine();
         let t = Instant::now();
         e.key_down(0, 0, t); // MO(1)
-        e.pointer_moved(150, 0, ms(t, 300));
+        e.pointer_moved(150, 0, 0, ms(t, 300));
         assert_eq!(e.top_layer(), 1);
         e.key_up(0, 0, ms(t, 400));
-        e.pointer_moved(150, 0, ms(t, 500));
+        e.pointer_moved(150, 0, 0, ms(t, 500));
         assert_eq!(e.top_layer(), 2);
         e.key_down(0, 0, ms(t, 600));
         e.tick(ms(t, 610));
