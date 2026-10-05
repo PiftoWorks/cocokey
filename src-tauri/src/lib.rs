@@ -11,7 +11,7 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
-use tauri::tray::TrayIconBuilder;
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use device::{Control, KeyboardInfo, LiveState, Shared};
@@ -96,6 +96,62 @@ fn apply_click_through(app: &AppHandle, enabled: bool) {
     let _ = app.emit("hud://click-through", enabled);
 }
 
+/// Native handle of a window, for the Win32 calls below.
+#[cfg(windows)]
+fn hwnd_of(w: &tauri::WebviewWindow) -> Option<windows::Win32::Foundation::HWND> {
+    w.hwnd().ok().map(|h| windows::Win32::Foundation::HWND(h.0 as _))
+}
+
+/// Minimise to the taskbar. On this transparent, undecorated window Tauri's
+/// `minimize()` can leave it without a taskbar button, so it looks as if it
+/// went to the tray; give it a taskbar button first, then minimise.
+#[tauri::command]
+fn minimize_main(app: AppHandle) {
+    let Some(w) = app.get_webview_window("main") else { return };
+    #[cfg(windows)]
+    if let Some(hwnd) = hwnd_of(&w) {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GetWindowLongPtrW, SetWindowLongPtrW, ShowWindow, GWL_EXSTYLE, SW_MINIMIZE, WS_EX_APPWINDOW,
+            WS_EX_TOOLWINDOW,
+        };
+        unsafe {
+            let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+            let ex = (ex & !WS_EX_TOOLWINDOW.0) | WS_EX_APPWINDOW.0;
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex as isize);
+            let _ = ShowWindow(hwnd, SW_MINIMIZE);
+        }
+        return;
+    }
+    let _ = w.minimize();
+}
+
+/// Put the window away in the tray (the close button and Alt+F4). Tauri's
+/// `hide()` alone can be ignored by a transparent window, so hide it natively too.
+fn hide_to_tray(app: &AppHandle) {
+    let Some(w) = app.get_webview_window("main") else { return };
+    let _ = w.hide();
+    #[cfg(windows)]
+    if let Some(hwnd) = hwnd_of(&w) {
+        use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE};
+        unsafe {
+            let _ = ShowWindow(hwnd, SW_HIDE);
+        }
+    }
+}
+
+#[tauri::command]
+fn hide_main_to_tray(app: AppHandle) {
+    hide_to_tray(&app);
+}
+
+/// Bring the window back from the tray or the taskbar.
+fn show_main(app: &AppHandle) {
+    let Some(w) = app.get_webview_window("main") else { return };
+    let _ = w.unminimize();
+    let _ = w.show();
+    let _ = w.set_focus();
+}
+
 fn japanese() -> bool {
     sys_locale::get_locale().is_some_and(|l| l.starts_with("ja"))
 }
@@ -103,7 +159,7 @@ fn japanese() -> bool {
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let ja = japanese();
     let t = |ja_text: &'static str, en_text: &'static str| if ja { ja_text } else { en_text };
-    let show = MenuItem::with_id(app, "show", t("表示／非表示", "Show / hide"), true, None::<&str>)?;
+    let show = MenuItem::with_id(app, "show", t("表示", "Show"), true, None::<&str>)?;
     let click = CheckMenuItem::with_id(app, "click", t("クリックを透過", "Click-through"), true, false, None::<&str>)?;
     let pause = CheckMenuItem::with_id(
         app,
@@ -124,17 +180,15 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let mut builder = TrayIconBuilder::with_id("main")
         .tooltip("CoCoKey")
         .menu(&menu)
-        .show_menu_on_left_click(true)
-        .on_menu_event(move |app, event| match event.id.as_ref() {
-            "show" => {
-                if let Some(w) = app.get_webview_window("main") {
-                    if w.is_visible().unwrap_or(true) {
-                        let _ = w.hide();
-                    } else {
-                        let _ = w.show();
-                    }
-                }
+        // Left click brings the window back; the menu is on the right button.
+        .show_menu_on_left_click(false)
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
+                show_main(tray.app_handle());
             }
+        })
+        .on_menu_event(move |app, event| match event.id.as_ref() {
+            "show" => show_main(app),
             "click" => {
                 let enabled = !app.state::<AppState>().click_through.load(Ordering::Relaxed);
                 apply_click_through(app, enabled);
@@ -165,6 +219,8 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // Must come first: a second launch only wakes up the running copy.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| show_main(app)))
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .setup(|app| {
             let handle = app.handle().clone();
@@ -194,12 +250,23 @@ pub fn run() {
             build_tray(&handle)?;
             Ok(())
         })
+        // Alt+F4 puts the window in the tray like the close button; quit from the tray menu.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" {
+                    api.prevent_close();
+                    hide_to_tray(window.app_handle());
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             snapshot,
             reload,
             reset_layers,
             set_paused,
             set_auto_mouse,
+            minimize_main,
+            hide_main_to_tray,
             select_device,
             import_definition,
             set_ignore_configurators,

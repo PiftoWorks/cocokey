@@ -817,6 +817,12 @@ function wire() {
   $("btn-switch").title = t("tip.switch");
   $("btn-menu").title = t("tip.menu");
   $("btn-macros").title = t("tip.macros");
+  $("btn-min").innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 12h12"/></svg>';
+  $("btn-close").innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7l10 10M17 7L7 17"/></svg>';
+  $("btn-min").title = t("tip.minimize");
+  $("btn-close").title = t("tip.close");
+  $("btn-min").onclick = () => invoke("minimize_main");
+  $("btn-close").onclick = () => invoke("hide_main_to_tray");
   $("btn-pin").innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4h6l-1 5 3 3v2H7v-2l3-3z"/><path d="M12 14v6"/></svg>';
   $("btn-pin").onclick = () => {
     alwaysOnTop = !alwaysOnTop;
@@ -869,7 +875,7 @@ function wire() {
     if (act === "reload") await invoke("reload");
     if (act === "reset") await invoke("reset_layers");
     if (act === "click") await invoke("set_click_through", { enabled: true });
-    if (act === "hide") await win.hide();
+    if (act === "hide") await invoke("hide_main_to_tray");
     schedule();
   };
   document.addEventListener("click", (e) => {

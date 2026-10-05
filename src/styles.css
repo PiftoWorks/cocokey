@@ -216,6 +216,17 @@ body {
   color: var(--text);
 }
 
+.tool.close:hover {
+  background: #c42b1c;
+  color: #fff;
+}
+
+.tool-sep {
+  width: 1px;
+  margin: 5px 3px;
+  background: var(--line);
+}
+
 /* layer colours (badge and switch list) */
 /* 鈍 · 朱 · 藍 · 山吹 · 若竹 · 藤 · 紅梅 · 浅葱 */
 .lc-0, .layer-color-0 { --lc: #6a645d; --lc-ink: #f4f0ea; }
