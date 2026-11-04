@@ -54,6 +54,7 @@ Start CoCoKey and connect the keyboard; it is picked up automatically.
 | Keep on top | pin button |
 | Add a VIA definition | drop the `.json` file on the window |
 | Settings | `⋯` button |
+| Dim the board and light up only the keys you press | **Highlight pressed keys** in the settings or the tray icon menu |
 | Click-through, pause, reload, quit | tray icon menu |
 
 Vial and CoCoKey share the same USB interface, and every reply on it reaches
@@ -126,6 +127,8 @@ CoCoKey（ココキー）は、キーボードがいまどのレイヤーにい�
   キーボード側の初期設定でこの機能がオフの機種は、メニューでオンにしてください。
 - 上部をドラッグで移動、縁や角のドラッグで拡大縮小。不透明度、クリック透過、
   レイヤー名の変更に対応しています。
+- 設定かタスクトレイのメニューで「押したキーを強調表示」をオンにすると、キー全体が暗くなり、
+  押しているキーだけが光ります。
 - Vial（デスクトップ版）の起動中は通信を止め、閉じるとキー配列を読み直します。
   ブラウザで動く設定ツール（Vial / VIA / Remap）で編集するときは、タスクトレイのメニューから「一時停止」を選び、
   編集が終わったら「キー配列を読み直す」を選んでください。
