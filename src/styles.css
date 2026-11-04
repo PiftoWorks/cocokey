@@ -28,6 +28,8 @@
   --cap-macro: #ddc8b0;
   --cap-layer: var(--accent);
   --cap-dance: #9a3b2a;
+  /* "Highlight pressed keys": rim of the pressed key (its glow is in index.html). */
+  --glow-rim: #fff7e6;
   /* Segoe UI for Latin text, BIZ UDPGothic (a Universal Design face shipped
      with Windows 10+) for Japanese; both stay legible at small sizes. */
   --font-ui: "Segoe UI", "BIZ UDPGothic", "Yu Gothic UI", "Meiryo", system-ui, sans-serif;
@@ -678,6 +680,34 @@ body {
   outline: 1px dashed var(--accent-line);
   outline-offset: -2px;
   border-radius: 8px;
+}
+
+/* ------------------------------------------------- highlight pressed keys
+   Only while #hud has .glow-mode; the default look above is untouched.
+   The other keys are darkened rather than faded, so on a light wallpaper
+   they turn into dark shapes instead of vanishing. The pressed key keeps
+   its colours and gets a bright rim, a thin dark ring (shows on light
+   backgrounds) and an amber glow (shows on dark ones): #key-glow. */
+#hud.glow-mode .key:not(.pressed) {
+  filter: brightness(0.45) saturate(0.6);
+}
+
+#hud.glow-mode .key.pressed {
+  filter: url(#key-glow);
+}
+
+#hud.glow-mode .key.pressed :is(rect, circle) {
+  stroke: var(--glow-rim);
+  stroke-width: 0.06;
+  opacity: 1;
+}
+
+.svg-defs {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  pointer-events: none;
 }
 
 /* ---------------------------------------------------------------- menu */

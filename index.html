@@ -43,6 +43,24 @@
       <div id="menu" hidden></div>
       <div id="grip" title=""></div>
     </div>
+    <!-- Glow for "highlight pressed keys" (sizes are in key widths). -->
+    <svg class="svg-defs" width="0" height="0" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
+      <filter id="key-glow" x="-50%" y="-50%" width="200%" height="200%" color-interpolation-filters="sRGB">
+        <feMorphology in="SourceAlpha" operator="dilate" radius="0.07" result="ring" />
+        <feFlood flood-color="#14110e" flood-opacity="0.9" />
+        <feComposite in2="ring" operator="in" result="dark" />
+        <feMorphology in="SourceAlpha" operator="dilate" radius="0.08" result="grown" />
+        <feGaussianBlur in="grown" stdDeviation="0.12" result="soft" />
+        <feFlood flood-color="#ffc861" />
+        <feComposite in2="soft" operator="in" result="glow" />
+        <feMerge>
+          <feMergeNode in="glow" />
+          <feMergeNode in="glow" />
+          <feMergeNode in="dark" />
+          <feMergeNode in="SourceGraphic" />
+        </feMerge>
+      </filter>
+    </svg>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

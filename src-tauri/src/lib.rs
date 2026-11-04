@@ -21,6 +21,9 @@ struct AppState {
     shared: Arc<Mutex<Shared>>,
     control: Mutex<Sender<Control>>,
     click_through: AtomicBool,
+    /// "Highlight pressed keys". The window saves the choice; this copy only
+    /// keeps the tray's check mark right.
+    highlight: AtomicBool,
 }
 
 #[derive(serde::Serialize)]
@@ -96,6 +99,19 @@ fn apply_click_through(app: &AppHandle, enabled: bool) {
     let _ = app.emit("hud://click-through", enabled);
 }
 
+/// Sent by the window at start-up and whenever the settings menu switches it.
+#[tauri::command]
+fn set_highlight(app: AppHandle, enabled: bool) {
+    apply_highlight(&app, enabled);
+}
+
+/// One place for both the settings menu and the tray: remember the choice,
+/// tell the window (which saves it and redraws) and the tray's check mark.
+fn apply_highlight(app: &AppHandle, enabled: bool) {
+    app.state::<AppState>().highlight.store(enabled, Ordering::Relaxed);
+    let _ = app.emit("hud://highlight", enabled);
+}
+
 /// Native handle of a window, for the Win32 calls below.
 #[cfg(windows)]
 fn hwnd_of(w: &tauri::WebviewWindow) -> Option<windows::Win32::Foundation::HWND> {
@@ -161,6 +177,14 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let t = |ja_text: &'static str, en_text: &'static str| if ja { ja_text } else { en_text };
     let show = MenuItem::with_id(app, "show", t("表示", "Show"), true, None::<&str>)?;
     let click = CheckMenuItem::with_id(app, "click", t("クリックを透過", "Click-through"), true, false, None::<&str>)?;
+    let highlight = CheckMenuItem::with_id(
+        app,
+        "highlight",
+        t("押したキーを強調表示", "Highlight pressed keys"),
+        true,
+        app.state::<AppState>().highlight.load(Ordering::Relaxed),
+        None::<&str>,
+    )?;
     let pause = CheckMenuItem::with_id(
         app,
         "pause",
@@ -174,9 +198,10 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let quit = MenuItem::with_id(app, "quit", t("終了", "Quit"), true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&show, &click, &sep, &pause, &reload, &reset, &sep2, &quit])?;
+    let menu = Menu::with_items(app, &[&show, &click, &highlight, &sep, &pause, &reload, &reset, &sep2, &quit])?;
 
     let click_item = click.clone();
+    let highlight_item = highlight.clone();
     let mut builder = TrayIconBuilder::with_id("main")
         .tooltip("CoCoKey")
         .menu(&menu)
@@ -193,6 +218,11 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                 let enabled = !app.state::<AppState>().click_through.load(Ordering::Relaxed);
                 apply_click_through(app, enabled);
                 let _ = click_item.set_checked(enabled);
+            }
+            "highlight" => {
+                let enabled = !app.state::<AppState>().highlight.load(Ordering::Relaxed);
+                apply_highlight(app, enabled);
+                let _ = highlight_item.set_checked(enabled);
             }
             "pause" => {
                 let checked = pause.is_checked().unwrap_or(false);
@@ -212,6 +242,11 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let click_sync = click.clone();
     tauri::Listener::listen(app, "hud://click-through", move |e| {
         let _ = click_sync.set_checked(e.payload() == "true");
+    });
+    // ... and when the settings menu switches "highlight pressed keys".
+    let highlight_sync = highlight.clone();
+    tauri::Listener::listen(app, "hud://highlight", move |e| {
+        let _ = highlight_sync.set_checked(e.payload() == "true");
     });
     Ok(())
 }
@@ -246,7 +281,12 @@ pub fn run() {
                     }
                 }),
             );
-            app.manage(AppState { shared, control: Mutex::new(control), click_through: AtomicBool::new(false) });
+            app.manage(AppState {
+                shared,
+                control: Mutex::new(control),
+                click_through: AtomicBool::new(false),
+                highlight: AtomicBool::new(false),
+            });
             build_tray(&handle)?;
             Ok(())
         })
@@ -270,7 +310,8 @@ pub fn run() {
             select_device,
             import_definition,
             set_ignore_configurators,
-            set_click_through
+            set_click_through,
+            set_highlight
         ])
         .run(tauri::generate_context!())
         .expect("error while running CoCoKey");

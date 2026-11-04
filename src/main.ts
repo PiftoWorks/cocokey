@@ -4,11 +4,13 @@ import { LogicalSize } from "@tauri-apps/api/dpi";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
+import { GLOW_CLASS, glowActive, raisePressed, readHighlight, saveHighlight } from "./highlight";
 import { t } from "./i18n";
 import { KC_NO, KC_TRNS, label, switchesOf, type Context, type CustomKeycode, type TapDance } from "./keycodes";
 import { layoutFor, type Layout } from "./layout";
 import { describeMacro, parseMacros } from "./macros";
 import { renderBoard, type KeyView, type Part } from "./render";
+import { createStore } from "./settings";
 import { standardLabel, standardLayout, type StandardKind, type StandardLayout } from "./standard";
 
 interface DeviceInfo {
@@ -90,23 +92,7 @@ try {
   /* storage unavailable */
 }
 
-const store = {
-  get<T>(key: string, fallback: T): T {
-    try {
-      const v = localStorage.getItem("cocokey." + key);
-      return v === null ? fallback : (JSON.parse(v) as T);
-    } catch {
-      return fallback;
-    }
-  },
-  set(key: string, value: unknown) {
-    try {
-      localStorage.setItem("cocokey." + key, JSON.stringify(value));
-    } catch {
-      /* storage unavailable: settings just won't persist */
-    }
-  },
-};
+const store = createStore(() => localStorage);
 
 let showSwitches = store.get("showSwitches", true);
 let opacity = store.get("opacity", 0.86);
@@ -130,6 +116,8 @@ let autoMouse = false;
 let boardAspect = 3;
 let boardUnits = 7;
 let keyOpacity = store.get("keyOpacity", 1);
+/** Dim the board and light up only the pressed keys. */
+let highlight = readHighlight(store);
 /** "auto": follow the keyboard typed on last; "tracked": always the Vial keyboard; "standard": always a plain layout. */
 let displayMode = store.get<"auto" | "tracked" | "standard">("displayMode", "auto");
 let standardKind = store.get<StandardKind>("standardKind", "us");
@@ -239,7 +227,23 @@ function showingStandard(): boolean {
   return typingOnTracked === false || !kb;
 }
 
-function renderStandard() {
+/** Turn the dimmed "highlight pressed keys" look on or off for this frame. */
+function applyGlow(standard: boolean): boolean {
+  const on = glowActive({
+    enabled: highlight,
+    previewing: preview !== null,
+    editingParts,
+    standard,
+    connected: st.connected,
+    cached,
+    paused: st.paused,
+    notice: st.notice,
+  });
+  $("hud").classList.toggle(GLOW_CLASS, on);
+  return on;
+}
+
+function renderStandard(glow: boolean) {
   if (standardCache?.kind !== standardKind) standardCache = { kind: standardKind, layout: standardLayout(standardKind) };
   const lay = standardCache.layout;
   $("empty").hidden = true;
@@ -256,7 +260,7 @@ function renderStandard() {
     inherited: false,
     pressed: otherKeys.has(key.col),
   }));
-  renderBoard(document.getElementById("board") as unknown as SVGSVGElement, lay, views);
+  renderBoard(document.getElementById("board") as unknown as SVGSVGElement, lay, raisePressed(views, glow));
   sizeBoard(lay.width / lay.height, lay.height);
 }
 
@@ -275,8 +279,10 @@ function render() {
   hud.classList.toggle("previewing", preview !== null);
   hud.classList.toggle("no-switches", !showSwitches);
 
-  if (showingStandard()) {
-    renderStandard();
+  const standard = showingStandard();
+  const glow = applyGlow(standard);
+  if (standard) {
+    renderStandard(glow);
     return;
   }
   const empty = $("empty");
@@ -356,7 +362,7 @@ function render() {
       editing: editingParts,
     };
   });
-  renderBoard(board, layout, views);
+  renderBoard(board, layout, raisePressed(views, glow));
   sizeBoard(layout.width / layout.height, layout.height);
 
   // how to switch from here
@@ -485,6 +491,7 @@ function buildMenu() {
     </select>`)}
     ${field(t("menu.keyOpacity"), `<input id="m-keys" type="range" min="0.1" max="1" step="0.01" value="${keyOpacity}">`)}
     ${field(t("menu.opacity"), `<input id="m-opacity" type="range" min="0" max="1" step="0.01" value="${opacity}" ${clearBackground ? "disabled" : ""}>`)}
+    ${toggle("m-highlight", highlight, t("menu.highlight"))}
     ${toggle("m-clear", clearBackground, t("menu.clear"))}
     ${toggle("m-switches", showSwitches, t("menu.layerNames"))}
     ${toggle("m-keysonly", keysOnly, t("menu.keysOnly"), "hint.keysOnly")}
@@ -523,6 +530,11 @@ function buildMenu() {
     keyOpacity = Number((e.target as HTMLInputElement).value);
     store.set("keyOpacity", keyOpacity);
     applyOpacity();
+  };
+  ($("m-highlight") as HTMLInputElement).onchange = (e) => {
+    setHighlight((e.target as HTMLInputElement).checked);
+    // Keeps the tray menu's check mark in step.
+    invoke("set_highlight", { enabled: highlight }).catch(() => {});
   };
   ($("m-clear") as HTMLInputElement).onchange = (e) => {
     clearBackground = (e.target as HTMLInputElement).checked;
@@ -674,6 +686,15 @@ function wireZoom() {
     wrap.classList.remove("panning");
   });
   new ResizeObserver(() => sizeBoard(boardAspect)).observe(wrap);
+}
+
+/** Switch "highlight pressed keys" (from the settings menu or the tray) and remember it. */
+function setHighlight(on: boolean) {
+  highlight = on;
+  saveHighlight(store, on);
+  const box = document.getElementById("m-highlight") as HTMLInputElement | null;
+  if (box) box.checked = on;
+  schedule();
 }
 
 function applyKeysOnly() {
@@ -933,6 +954,10 @@ async function main() {
     clickThrough = e.payload;
     schedule();
   });
+  // Switched from the tray menu (and the echo of our own changes).
+  await listen<boolean>("hud://highlight", (e) => setHighlight(e.payload === true));
+  // Only the tray check mark depends on this; never hold up start-up for it.
+  invoke("set_highlight", { enabled: highlight }).catch(() => {});
   await getCurrentWebview().onDragDropEvent(async (e) => {
     if (e.payload.type !== "drop") return;
     const file = e.payload.paths.find((p) => p.toLowerCase().endsWith(".json"));
