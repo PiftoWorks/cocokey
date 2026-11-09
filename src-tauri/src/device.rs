@@ -21,6 +21,13 @@ const RECONNECT: Duration = Duration::from_millis(1500);
 const MAX_ERRORS: u32 = 5;
 const UNLOCK_CHECK: Duration = Duration::from_secs(2);
 const APP_CHECK: Duration = Duration::from_secs(2);
+/// While the keyboard's own pointing device is moving, read the switch matrix
+/// at most this often. Every request makes the keyboard stop and answer; at
+/// the normal pace (about 100 a second) that can make its built-in pointing
+/// device move the cursor unevenly.
+const POINTER_POLL: Duration = Duration::from_millis(50);
+/// The pointer counts as moving until it has been still for this long.
+const POINTER_REST: Duration = Duration::from_millis(200);
 
 /// Keyboards whose firmware turns on a mouse layer by itself when the
 /// built-in pointing device moves, and whether it does so out of the box.
@@ -148,6 +155,95 @@ struct Connection {
     last_unlock_check: Option<Instant>,
     /// Mouse layer rules for this keyboard (used when the user enables it).
     auto_mouse: Option<AutoMouse>,
+    /// When the keyboard's own pointing device last moved, and when the
+    /// matrix was last read (see POINTER_POLL).
+    last_pointer_move: Option<Instant>,
+    last_matrix_read: Option<Instant>,
+}
+
+impl Connection {
+    /// The keyboard's own pointing device moved (seen through Raw Input).
+    fn pointer_moved(&mut self, dx: i32, dy: i32, dw: i32, now: Instant) {
+        self.last_pointer_move = Some(now);
+        self.engine.pointer_moved(dx, dy, dw, now);
+    }
+
+    /// Read the matrix this round? Every round, except while the keyboard's
+    /// pointer is moving: then only every POINTER_POLL.
+    fn matrix_due(&mut self, now: Instant) -> bool {
+        let moving = self.last_pointer_move.is_some_and(|t| now.duration_since(t) < POINTER_REST);
+        if moving && self.last_matrix_read.is_some_and(|t| now.duration_since(t) < POINTER_POLL) {
+            return false;
+        }
+        self.last_matrix_read = Some(now);
+        true
+    }
+
+    /// One round of the worker loop: layer reports, the switch matrix (or the
+    /// unlock check) and the engine's timers.
+    fn poll(&mut self, now: Instant) {
+        for r in self.raw.take_reports() {
+            self.firmware = Some((r.layer_state, r.default_layer));
+            self.engine.sync_from_firmware(r.layer_state, r.default_layer);
+        }
+        if self.info.matrix_available {
+            if self.matrix_due(now) {
+                self.read_matrix(now);
+            }
+        } else if self.last_unlock_check.is_none_or(|t| now.duration_since(t) >= UNLOCK_CHECK) {
+            // Locked in Vial: check now and then whether the user unlocked it.
+            self.last_unlock_check = Some(now);
+            if self.info.vial_protocol.is_some() {
+                if self.raw.vial_unlocked() {
+                    self.info.matrix_available = true;
+                } else if self.raw.via_protocol().is_err() {
+                    self.errors += 1;
+                }
+            } else if self.raw.via_protocol().is_err() {
+                self.errors += 1;
+            }
+        }
+        self.engine.tick(now);
+        if let Some((state, default)) = self.firmware {
+            // The firmware is authoritative; keep the replica aligned.
+            self.engine.layer_state = state;
+            if default != 0 {
+                self.engine.default_layer = default;
+            }
+        }
+    }
+
+    fn read_matrix(&mut self, now: Instant) {
+        match self.raw.matrix_state(self.info.rows, self.info.cols) {
+            Ok(mut m) => {
+                for (row, bits) in m.iter_mut().enumerate() {
+                    if let Some(ign) = self.ignored.get_mut(row) {
+                        *ign &= *bits; // released once -> tracked from now on
+                        *bits &= !*ign;
+                    }
+                }
+                self.errors = 0;
+                for row in 0..self.info.rows.min(m.len()) {
+                    let changed = m[row] ^ self.matrix[row];
+                    if changed == 0 {
+                        continue;
+                    }
+                    for col in 0..self.info.cols {
+                        if changed & (1 << col) == 0 {
+                            continue;
+                        }
+                        if m[row] & (1 << col) != 0 {
+                            self.engine.key_down(row, col, now);
+                        } else {
+                            self.engine.key_up(row, col, now);
+                        }
+                    }
+                }
+                self.matrix = m;
+            }
+            Err(_) => self.errors += 1,
+        }
+    }
 }
 
 pub fn spawn(app: AppHandle, shared: Arc<Mutex<Shared>>, pointer_target: Target) -> Sender<Control> {
@@ -256,7 +352,7 @@ impl Worker {
                 }
                 Ok(Control::PointerMoved(dx, dy, dw)) => {
                     if let Some(c) = self.conn.as_mut() {
-                        c.engine.pointer_moved(dx, dy, dw, now);
+                        c.pointer_moved(dx, dy, dw, now);
                     }
                 }
                 Ok(Control::Import(path)) => {
@@ -376,10 +472,12 @@ impl Worker {
                 Ok(conn) => {
                     self.store.remember_kind(d.vendor_id, d.product_id, conn.info.vial_protocol.is_some());
                     self.held_back = None;
+                    // The pointer is reported also without a mouse layer rule:
+                    // the matrix is read less often while it moves.
                     *self.pointer_target.lock().unwrap() = Some(TargetInfo {
                         vendor_id: conn.info.device.vendor_id,
                         product_id: conn.info.device.product_id,
-                        pointer: conn.info.auto_mouse_layer.is_some(),
+                        pointer: true,
                     });
                     self.notice = None;
                     self.shared.lock().unwrap().keyboard = Some(conn.info.clone());
@@ -408,61 +506,7 @@ impl Worker {
 
     fn poll(&mut self, now: Instant) {
         let Some(c) = self.conn.as_mut() else { return };
-        for r in c.raw.take_reports() {
-            c.firmware = Some((r.layer_state, r.default_layer));
-            c.engine.sync_from_firmware(r.layer_state, r.default_layer);
-        }
-        if c.info.matrix_available {
-            match c.raw.matrix_state(c.info.rows, c.info.cols) {
-                Ok(mut m) => {
-                    for (row, bits) in m.iter_mut().enumerate() {
-                        if let Some(ign) = c.ignored.get_mut(row) {
-                            *ign &= *bits; // released once -> tracked from now on
-                            *bits &= !*ign;
-                        }
-                    }
-                    c.errors = 0;
-                    for row in 0..c.info.rows.min(m.len()) {
-                        let changed = m[row] ^ c.matrix[row];
-                        if changed == 0 {
-                            continue;
-                        }
-                        for col in 0..c.info.cols {
-                            if changed & (1 << col) == 0 {
-                                continue;
-                            }
-                            if m[row] & (1 << col) != 0 {
-                                c.engine.key_down(row, col, now);
-                            } else {
-                                c.engine.key_up(row, col, now);
-                            }
-                        }
-                    }
-                    c.matrix = m;
-                }
-                Err(_) => c.errors += 1,
-            }
-        } else if c.last_unlock_check.is_none_or(|t| now.duration_since(t) >= UNLOCK_CHECK) {
-            // Locked in Vial: check now and then whether the user unlocked it.
-            c.last_unlock_check = Some(now);
-            if c.info.vial_protocol.is_some() {
-                if c.raw.vial_unlocked() {
-                    c.info.matrix_available = true;
-                } else if c.raw.via_protocol().is_err() {
-                    c.errors += 1;
-                }
-            } else if c.raw.via_protocol().is_err() {
-                c.errors += 1;
-            }
-        }
-        c.engine.tick(now);
-        if let Some((state, default)) = c.firmware {
-            // The firmware is authoritative; keep the replica aligned.
-            c.engine.layer_state = state;
-            if default != 0 {
-                c.engine.default_layer = default;
-            }
-        }
+        c.poll(now);
         if c.errors >= MAX_ERRORS {
             self.notice = Some("disconnected".into());
             self.disconnect();
@@ -652,5 +696,213 @@ fn load(api: &HidApi, d: &DeviceInfo, store: &Store) -> Result<Connection, LoadE
         firmware: firmware.map(|r| (r.layer_state, r.default_layer)),
         last_unlock_check: None,
         auto_mouse,
+        last_pointer_move: None,
+        last_matrix_read: None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::{Cell, RefCell};
+    use std::collections::VecDeque;
+    use std::rc::Rc;
+
+    use super::*;
+    use crate::engine::Keymap;
+    use crate::protocol::Transport;
+
+    const ROWS: usize = 14;
+    const COLS: usize = 7;
+    /// MO(1) at row 0, col 0.
+    const MO1: u16 = 0x5221;
+
+    /// What the stand-in keyboard saw, shared with the test.
+    #[derive(Default)]
+    struct Log {
+        /// Simulated time in ms (the test moves it forward).
+        now_ms: Cell<u64>,
+        /// When each matrix request arrived (ms).
+        matrix_requests: RefCell<Vec<u64>>,
+        /// Keys held: (row, col, from ms, until ms).
+        held: RefCell<Vec<(usize, usize, u64, u64)>>,
+    }
+
+    /// Answers like a VIA protocol 12 keyboard with a 14 x 7 matrix (one
+    /// paged reply holds every row) and counts the matrix requests.
+    struct FakeKeyboard {
+        log: Rc<Log>,
+        replies: VecDeque<[u8; 32]>,
+    }
+
+    impl Transport for FakeKeyboard {
+        fn write(&mut self, data: &[u8]) -> Result<usize, String> {
+            let req = &data[1..];
+            let mut reply = [0u8; 32];
+            let n = req.len().min(32);
+            reply[..n].copy_from_slice(&req[..n]);
+            if req[0] == 0x02 && req[1] == 0x03 {
+                let now = self.log.now_ms.get();
+                self.log.matrix_requests.borrow_mut().push(now);
+                let offset = req[2] as usize;
+                for &(row, col, from, until) in self.log.held.borrow().iter() {
+                    if (from..until).contains(&now) && row >= offset && 3 + row - offset < 32 {
+                        reply[3 + row - offset] |= 1 << col;
+                    }
+                }
+            }
+            self.replies.push_back(reply);
+            Ok(data.len())
+        }
+
+        fn read_timeout(&mut self, buf: &mut [u8], _timeout_ms: i32) -> Result<usize, String> {
+            match self.replies.pop_front() {
+                Some(r) => {
+                    buf[..32].copy_from_slice(&r);
+                    Ok(32)
+                }
+                None => Ok(0),
+            }
+        }
+    }
+
+    fn connection(log: Rc<Log>) -> Connection {
+        let mut raw = RawHid::with_transport(Box::new(FakeKeyboard { log, replies: VecDeque::new() }));
+        raw.set_paged_matrix(true);
+        let mut codes = vec![0u16; 2 * ROWS * COLS];
+        codes[0] = MO1;
+        let keymap = Keymap { layers: 2, rows: ROWS, cols: COLS, codes: codes.clone() };
+        let info = KeyboardInfo {
+            id: "4d59:0300".into(),
+            device: DeviceInfo {
+                path: "fake".into(),
+                vendor_id: 0x4D59,
+                product_id: 0x0300,
+                product: "fake".into(),
+                manufacturer: "fake".into(),
+            },
+            via_protocol: 12,
+            vial_protocol: None,
+            layers: 2,
+            rows: ROWS,
+            cols: COLS,
+            keymap: codes,
+            tap_dances: vec![],
+            tapping_term: 200,
+            definition: None,
+            matrix_available: true,
+            firmware_reports: false,
+            auto_mouse_layer: None,
+            auto_mouse_default: false,
+            legacy_keycodes: false,
+            macro_buffer: vec![],
+            macro_count: 0,
+            encoders: vec![],
+        };
+        Connection {
+            raw,
+            engine: Engine::new(keymap, vec![], 200),
+            info,
+            matrix: vec![0; ROWS],
+            ignored: vec![0; ROWS],
+            errors: 0,
+            firmware: None,
+            last_unlock_check: None,
+            auto_mouse: None,
+            last_pointer_move: None,
+            last_matrix_read: None,
+        }
+    }
+
+    /// Runs the worker's rounds for `ms` milliseconds at the normal pace (one
+    /// round every POLL). `moving(t)` says whether the keyboard's pointer
+    /// reported movement just before the round at time t; `inspect` sees the
+    /// connection after every round.
+    fn run(c: &mut Connection, log: &Log, ms: u64, moving: impl Fn(u64) -> bool, mut inspect: impl FnMut(&Connection)) {
+        let t0 = Instant::now();
+        let step = POLL.as_millis() as u64;
+        let mut t = 0;
+        while t < ms {
+            log.now_ms.set(t);
+            let now = t0 + Duration::from_millis(t);
+            if moving(t) {
+                c.pointer_moved(3, -2, 0, now);
+            }
+            c.poll(now);
+            inspect(c);
+            t += step;
+        }
+    }
+
+    fn requests_between(log: &Log, from: u64, until: u64) -> usize {
+        log.matrix_requests.borrow().iter().filter(|&&t| (from..until).contains(&t)).count()
+    }
+
+    #[test]
+    fn matrix_is_read_every_round_while_the_pointer_rests() {
+        // Unchanged from before: short taps (layer keys, TG, OSL) need the fast pace.
+        let log = Rc::new(Log::default());
+        let mut c = connection(log.clone());
+        run(&mut c, &log, 1000, |_| false, |_| {});
+        assert_eq!(requests_between(&log, 0, 1000), 125);
+    }
+
+    #[test]
+    fn matrix_reads_back_off_while_the_keyboards_pointer_moves() {
+        // Answering a matrix request keeps the keyboard busy; while its own
+        // pointer is moving, ask less often.
+        let log = Rc::new(Log::default());
+        let mut c = connection(log.clone());
+        run(&mut c, &log, 1000, |_| true, |_| {});
+        let n = requests_between(&log, 0, 1000);
+        assert!(n <= 21, "{n} matrix requests in 1 s while the pointer moved");
+        assert!(n >= 15, "{n}: keys pressed while moving (drag, clicks) must still show");
+        let times = log.matrix_requests.borrow().clone();
+        let min_gap = times.windows(2).map(|w| w[1] - w[0]).min().unwrap();
+        assert!(min_gap >= 48, "requests only {min_gap} ms apart while the pointer moved");
+    }
+
+    #[test]
+    fn matrix_reads_return_to_the_fast_pace_soon_after_the_pointer_stops() {
+        let log = Rc::new(Log::default());
+        let mut c = connection(log.clone());
+        run(&mut c, &log, 1000, |t| t < 300, |_| {});
+        // Movement ends at 296 ms; from 200 ms later every round reads again.
+        assert_eq!(requests_between(&log, 504, 1000), (1000 - 504) / 8);
+    }
+
+    #[test]
+    fn a_key_held_while_the_pointer_moves_still_shows() {
+        // MO(1) held for 120 ms in the middle of a pointer movement.
+        let log = Rc::new(Log::default());
+        log.held.borrow_mut().push((0, 0, 400, 520));
+        let mut c = connection(log.clone());
+        let mut seen_pressed = false;
+        let mut seen_layer = false;
+        run(&mut c, &log, 1000, |_| true, |c| {
+            seen_pressed |= c.matrix[0] & 1 != 0;
+            seen_layer |= c.engine.layer_state & 0b10 != 0;
+        });
+        assert!(seen_pressed, "the held key never showed as pressed");
+        assert!(seen_layer, "MO(1) never turned layer 1 on");
+        assert_eq!(c.matrix[0] & 1, 0, "released key still shows as pressed");
+        assert_eq!(c.engine.layer_state & 0b10, 0, "layer 1 stayed on after release");
+    }
+
+    #[test]
+    fn the_worker_hands_pointer_movement_to_the_connection() {
+        // The pace above only works if the loop passes Raw Input movement to
+        // Connection::pointer_moved, and Raw Input reports it for every
+        // tracked keyboard (not only those with a mouse layer rule).
+        let src = include_str!("device.rs");
+        let body: String = src.split("#[cfg(test)]").next().unwrap().split_whitespace().collect();
+        let wanted = [
+            "Ok(Control::PointerMoved(dx,dy,dw))=>{",
+            "ifletSome(c)=self.conn.as_mut(){",
+            "c.pointer_moved(dx,dy,dw,now);",
+        ]
+        .concat();
+        assert!(body.contains(&wanted), "PointerMoved does not reach Connection::pointer_moved");
+        let report = ["product_id:conn.info.device.product_id,", "pointer:true,"].concat();
+        assert!(body.contains(&report), "the tracked keyboard's pointer movement is not reported");
+    }
 }

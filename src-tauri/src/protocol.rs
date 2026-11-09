@@ -78,8 +78,25 @@ pub fn list_devices(api: &HidApi) -> Vec<DeviceInfo> {
     out
 }
 
+/// What `RawHid` needs from the device: a real HID handle, or a stand-in
+/// that answers like a keyboard in the tests.
+pub trait Transport {
+    fn write(&mut self, data: &[u8]) -> Result<usize, String>;
+    fn read_timeout(&mut self, buf: &mut [u8], timeout_ms: i32) -> Result<usize, String>;
+}
+
+impl Transport for HidDevice {
+    fn write(&mut self, data: &[u8]) -> Result<usize, String> {
+        HidDevice::write(self, data).map_err(|e| e.to_string())
+    }
+
+    fn read_timeout(&mut self, buf: &mut [u8], timeout_ms: i32) -> Result<usize, String> {
+        HidDevice::read_timeout(self, buf, timeout_ms).map_err(|e| e.to_string())
+    }
+}
+
 pub struct RawHid {
-    dev: HidDevice,
+    dev: Box<dyn Transport>,
     reports: Vec<LayerReport>,
     layer_report_enabled: bool,
     /// VIA protocol 12+ (QMK 0.19+) answers matrix queries with a row offset
@@ -91,9 +108,13 @@ impl RawHid {
     pub fn open(api: &HidApi, path: &str) -> Result<Self, String> {
         let cpath = std::ffi::CString::new(path).map_err(|e| e.to_string())?;
         let dev = api.open_path(&cpath).map_err(|e| e.to_string())?;
+        Ok(Self::with_transport(Box::new(dev)))
+    }
+
+    pub fn with_transport(dev: Box<dyn Transport>) -> Self {
         let mut me = Self { dev, reports: vec![], layer_report_enabled: false, paged_matrix: false };
         me.drain();
-        Ok(me)
+        me
     }
 
     /// Discard reports left over from earlier traffic.
@@ -143,12 +164,9 @@ impl RawHid {
         }
         let mut out = [0u8; REPORT + 1];
         out[1..1 + req.len().min(REPORT)].copy_from_slice(&req[..req.len().min(REPORT)]);
-        self.dev.write(&out).map_err(|e| e.to_string())?;
+        self.dev.write(&out)?;
         for _ in 0..16 {
-            let n = self
-                .dev
-                .read_timeout(&mut buf, TIMEOUT.as_millis() as i32)
-                .map_err(|e| e.to_string())?;
+            let n = self.dev.read_timeout(&mut buf, TIMEOUT.as_millis() as i32)?;
             if n == 0 {
                 return Err("timeout".into());
             }
