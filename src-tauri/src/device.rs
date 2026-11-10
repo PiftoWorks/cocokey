@@ -25,9 +25,14 @@ const APP_CHECK: Duration = Duration::from_secs(2);
 /// at most this often. Every request makes the keyboard stop and answer; at
 /// the normal pace (about 100 a second) that can make its built-in pointing
 /// device move the cursor unevenly.
-const POINTER_POLL: Duration = Duration::from_millis(50);
+const POINTER_POLL: Duration = Duration::from_millis(100);
 /// The pointer counts as moving until it has been still for this long.
 const POINTER_REST: Duration = Duration::from_millis(200);
+/// While the pointer moves, a read also waits this many times as long as the
+/// previous read took. A normal read takes a few milliseconds, so this only
+/// matters when the keyboard (or the PC) is slow to answer: then it is asked
+/// less often instead of being kept busy.
+const SLOW_READ_SPACING: u32 = 4;
 
 /// Keyboards whose firmware turns on a mouse layer by itself when the
 /// built-in pointing device moves, and whether it does so out of the box.
@@ -159,6 +164,10 @@ struct Connection {
     /// matrix was last read (see POINTER_POLL).
     last_pointer_move: Option<Instant>,
     last_matrix_read: Option<Instant>,
+    /// How long the last matrix read took (see SLOW_READ_SPACING).
+    last_read_took: Duration,
+    /// Where that time comes from (a stand-in clock in the tests).
+    clock: Box<dyn Fn() -> Instant>,
 }
 
 impl Connection {
@@ -169,10 +178,14 @@ impl Connection {
     }
 
     /// Read the matrix this round? Every round, except while the keyboard's
-    /// pointer is moving: then only every POINTER_POLL.
+    /// pointer is moving: then only every POINTER_POLL, or longer after slow
+    /// reads (SLOW_READ_SPACING). The resting pace never changes, so short
+    /// taps are not missed. Rounds that come late never make up for the reads
+    /// they missed: the next read is counted from the last one done.
     fn matrix_due(&mut self, now: Instant) -> bool {
         let moving = self.last_pointer_move.is_some_and(|t| now.duration_since(t) < POINTER_REST);
-        if moving && self.last_matrix_read.is_some_and(|t| now.duration_since(t) < POINTER_POLL) {
+        let wait = if moving { POINTER_POLL.max(self.last_read_took * SLOW_READ_SPACING) } else { Duration::ZERO };
+        if self.last_matrix_read.is_some_and(|t| now.duration_since(t) < wait) {
             return false;
         }
         self.last_matrix_read = Some(now);
@@ -188,7 +201,9 @@ impl Connection {
         }
         if self.info.matrix_available {
             if self.matrix_due(now) {
+                let started = (self.clock)();
                 self.read_matrix(now);
+                self.last_read_took = (self.clock)().saturating_duration_since(started);
             }
         } else if self.last_unlock_check.is_none_or(|t| now.duration_since(t) >= UNLOCK_CHECK) {
             // Locked in Vial: check now and then whether the user unlocked it.
@@ -698,6 +713,8 @@ fn load(api: &HidApi, d: &DeviceInfo, store: &Store) -> Result<Connection, LoadE
         auto_mouse,
         last_pointer_move: None,
         last_matrix_read: None,
+        last_read_took: Duration::ZERO,
+        clock: Box::new(Instant::now),
     })
 }
 
@@ -717,14 +734,29 @@ mod tests {
     const MO1: u16 = 0x5221;
 
     /// What the stand-in keyboard saw, shared with the test.
-    #[derive(Default)]
     struct Log {
+        /// Simulated time zero.
+        t0: Instant,
         /// Simulated time in ms (the test moves it forward).
         now_ms: Cell<u64>,
+        /// How long the keyboard takes to answer a matrix request (ms).
+        read_ms: Cell<u64>,
         /// When each matrix request arrived (ms).
         matrix_requests: RefCell<Vec<u64>>,
         /// Keys held: (row, col, from ms, until ms).
         held: RefCell<Vec<(usize, usize, u64, u64)>>,
+    }
+
+    impl Default for Log {
+        fn default() -> Self {
+            Self {
+                t0: Instant::now(),
+                now_ms: Cell::new(0),
+                read_ms: Cell::new(0),
+                matrix_requests: RefCell::new(vec![]),
+                held: RefCell::new(vec![]),
+            }
+        }
     }
 
     /// Answers like a VIA protocol 12 keyboard with a 14 x 7 matrix (one
@@ -749,6 +781,8 @@ mod tests {
                         reply[3 + row - offset] |= 1 << col;
                     }
                 }
+                // The answer takes this long (the round's own time is set again next round).
+                self.log.now_ms.set(now + self.log.read_ms.get());
             }
             self.replies.push_back(reply);
             Ok(data.len())
@@ -766,6 +800,7 @@ mod tests {
     }
 
     fn connection(log: Rc<Log>) -> Connection {
+        let clock_log = log.clone();
         let mut raw = RawHid::with_transport(Box::new(FakeKeyboard { log, replies: VecDeque::new() }));
         raw.set_paged_matrix(true);
         let mut codes = vec![0u16; 2 * ROWS * COLS];
@@ -810,6 +845,8 @@ mod tests {
             auto_mouse: None,
             last_pointer_move: None,
             last_matrix_read: None,
+            last_read_took: Duration::ZERO,
+            clock: Box::new(move || clock_log.t0 + Duration::from_millis(clock_log.now_ms.get())),
         }
     }
 
@@ -817,19 +854,28 @@ mod tests {
     /// round every POLL). `moving(t)` says whether the keyboard's pointer
     /// reported movement just before the round at time t; `inspect` sees the
     /// connection after every round.
-    fn run(c: &mut Connection, log: &Log, ms: u64, moving: impl Fn(u64) -> bool, mut inspect: impl FnMut(&Connection)) {
-        let t0 = Instant::now();
-        let step = POLL.as_millis() as u64;
-        let mut t = 0;
-        while t < ms {
+    fn run(c: &mut Connection, log: &Log, ms: u64, moving: impl Fn(u64) -> bool, inspect: impl FnMut(&Connection)) {
+        let step = POLL.as_millis() as usize;
+        run_at(c, log, (0..ms).step_by(step), moving, inspect);
+    }
+
+    /// Like `run`, with the rounds at the given times (ms), e.g. with a gap
+    /// where the PC was too busy to run the loop.
+    fn run_at(
+        c: &mut Connection,
+        log: &Log,
+        rounds: impl IntoIterator<Item = u64>,
+        moving: impl Fn(u64) -> bool,
+        mut inspect: impl FnMut(&Connection),
+    ) {
+        for t in rounds {
             log.now_ms.set(t);
-            let now = t0 + Duration::from_millis(t);
+            let now = log.t0 + Duration::from_millis(t);
             if moving(t) {
                 c.pointer_moved(3, -2, 0, now);
             }
             c.poll(now);
             inspect(c);
-            t += step;
         }
     }
 
@@ -854,11 +900,62 @@ mod tests {
         let mut c = connection(log.clone());
         run(&mut c, &log, 1000, |_| true, |_| {});
         let n = requests_between(&log, 0, 1000);
-        assert!(n <= 21, "{n} matrix requests in 1 s while the pointer moved");
-        assert!(n >= 15, "{n}: keys pressed while moving (drag, clicks) must still show");
+        assert!(n <= 11, "{n} matrix requests in 1 s while the pointer moved");
+        assert!(n >= 8, "{n}: keys held while moving (drag, MO) must still show");
+        assert!(min_gap(&log) >= 96, "requests only {} ms apart while the pointer moved", min_gap(&log));
+    }
+
+    fn min_gap(log: &Log) -> u64 {
         let times = log.matrix_requests.borrow().clone();
-        let min_gap = times.windows(2).map(|w| w[1] - w[0]).min().unwrap();
-        assert!(min_gap >= 48, "requests only {min_gap} ms apart while the pointer moved");
+        times.windows(2).map(|w| w[1] - w[0]).min().unwrap()
+    }
+
+    #[test]
+    fn the_pointer_counts_as_moving_between_sparse_reports() {
+        // On a busy PC the movement reports reach the loop late and far apart
+        // (up to 90 ms with every core busy). The gaps between them must not
+        // count as the pointer having stopped.
+        let log = Rc::new(Log::default());
+        let mut c = connection(log.clone());
+        run(&mut c, &log, 1000, |t| t % 120 == 0, |_| {});
+        let n = requests_between(&log, 0, 1000);
+        assert!(n <= 11, "{n} matrix requests in 1 s with a movement report every 120 ms");
+    }
+
+    #[test]
+    fn slow_reads_are_spaced_out_while_the_pointer_moves() {
+        // Reads that take 40 ms mean the keyboard or the PC is struggling:
+        // while the pointer moves, leave the keyboard alone for longer.
+        let log = Rc::new(Log::default());
+        log.read_ms.set(40);
+        let mut c = connection(log.clone());
+        run(&mut c, &log, 1000, |_| true, |_| {});
+        let n = requests_between(&log, 0, 1000);
+        assert!(n <= 7, "{n} matrix requests in 1 s although each took 40 ms");
+        assert!(min_gap(&log) >= 160, "slow requests only {} ms apart", min_gap(&log));
+    }
+
+    #[test]
+    fn slow_reads_do_not_slow_the_resting_pace() {
+        // At rest every round still reads (short taps, TG, OSL), however long
+        // the reads take.
+        let log = Rc::new(Log::default());
+        log.read_ms.set(40);
+        let mut c = connection(log.clone());
+        run(&mut c, &log, 1000, |_| false, |_| {});
+        assert_eq!(requests_between(&log, 0, 1000), 125);
+    }
+
+    #[test]
+    fn a_late_round_does_not_make_up_for_missed_reads() {
+        // The loop did not run from 400 to 900 ms (PC too busy). When it comes
+        // back, it reads once and keeps the pace instead of catching up.
+        let log = Rc::new(Log::default());
+        let mut c = connection(log.clone());
+        let rounds = (0u64..400).step_by(8).chain((900u64..1100).step_by(8));
+        run_at(&mut c, &log, rounds, |_| true, |_| {});
+        assert_eq!(requests_between(&log, 900, 1000), 1, "requests right after the late round");
+        assert!(requests_between(&log, 900, 1100) <= 2);
     }
 
     #[test]
