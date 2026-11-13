@@ -28,6 +28,14 @@ configure: plug in a Vial or VIA keyboard and the HUD draws it.
 - Resize by dragging any edge or corner, move by dragging the top bar,
   adjustable opacity, click-through mode, per-keyboard layer names.
 
+## Download
+
+Download `CoCoKey_<version>_x64-setup.exe` from the [Releases](../../releases)
+page and run it. No administrator rights are needed; CoCoKey is installed for
+your Windows user only.
+
+To remove it, open **Settings → Apps** in Windows and uninstall **CoCoKey**.
+
 ## Requirements
 
 - Windows 10 / 11
@@ -91,9 +99,15 @@ CoCoKey talks to the keyboard over the VIA raw HID interface
    trackball or trackpoint is moving, so the keyboard is not kept busy
    answering) and replays the layer keycodes with the same rules QMK/Vial use.
 
-Nothing is written to the keyboard. To tell which keyboard you typed on last,
-CoCoKey listens to raw keyboard input; it only keeps the set of keys that are
-held right now and records nothing.
+## Privacy
+
+- Nothing is written to the keyboard.
+- To tell which keyboard you typed on last, CoCoKey listens to raw keyboard
+  input. It only keeps the set of keys that are held right now; nothing is
+  recorded or saved.
+- The only network access is downloading a VIA keyboard's layout definition
+  from VIA's public catalog (`usevia.app`), by the keyboard's USB id. Nothing
+  else is sent.
 
 ## Limitations
 
@@ -136,6 +150,34 @@ CoCoKey（ココキー）は、キーボードがいまどのレイヤーにい�
 - Vial（デスクトップ版）の起動中は通信を止め、閉じるとキー配列を読み直します。
   ブラウザで動く設定ツール（Vial / VIA / Remap）で編集するときは、タスクトレイのメニューから「一時停止」を選び、
   編集が終わったら「キー配列を読み直す」を選んでください。
+
+### 入手とアンインストール
+
+[Releases](../../releases) のページから `CoCoKey_<版>_x64-setup.exe` をダウンロードして実行してください。
+管理者の権限は要りません（使っている Windows のユーザーにだけインストールされます）。
+
+アンインストールは、Windows の「設定 → アプリ」で CoCoKey を選んで行います。
+
+### 動作環境
+
+- Windows 10 / 11
+- レイヤーの追跡には、Vial か VIA のファームウェアのキーボードが要ります。
+- Vial のキーボードは、Vial でロックを解除した状態で使ってください（ロック中はキーの押下を読めません）。
+  `VIAL_INSECURE` で作ったキーボード（Svalboard など）は常に解除されています。
+
+### プライバシー
+
+- キーボードには何も書き込みません。
+- 最後に打ったキーボードを見分けるために、キーボードの入力を受け取っています。
+  受け取るのは「いま押されているキー」だけで、入力を記録・保存することはありません。
+- 通信は、VIA のキーボードの配置データを VIA の公開カタログ（`usevia.app`）から
+  USB の ID で取得するときだけです。ほかには何も送りません。
+
+### できないこと
+
+- キーの押下から再現しているため、コンボ・キーオーバーライド・独自のファームウェアのコードによる
+  レイヤーの切り替えは追えません。正確に追うにはファームウェアの追加部品を使ってください。
+- キーの表示は、Windows のキーボードの設定が US 配列であることを前提にしています。
 
 ## ライセンス
 
