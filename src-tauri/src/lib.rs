@@ -4,6 +4,7 @@ mod definitions;
 mod device;
 mod engine;
 mod keycode;
+mod notices;
 mod pointer;
 mod protocol;
 
@@ -211,10 +212,11 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     )?;
     let reload = MenuItem::with_id(app, "reload", t("キー配列を読み直す", "Reload keymap"), true, None::<&str>)?;
     let reset = MenuItem::with_id(app, "reset", t("レイヤーを初期状態に戻す", "Reset layer state"), true, None::<&str>)?;
+    let licenses = MenuItem::with_id(app, "notices", t("ライセンス", "Licenses"), true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", t("終了", "Quit"), true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&show, &click, &highlight, &sep, &pause, &reload, &reset, &sep2, &quit])?;
+    let menu = Menu::with_items(app, &[&show, &click, &highlight, &sep, &pause, &reload, &reset, &sep2, &licenses, &quit])?;
 
     let click_item = click.clone();
     let highlight_item = highlight.clone();
@@ -246,6 +248,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
             }
             "reload" => send(app, Control::Reload),
             "reset" => send(app, Control::Reset),
+            "notices" => notices::open(app),
             "quit" => app.exit(0),
             _ => {}
         });
