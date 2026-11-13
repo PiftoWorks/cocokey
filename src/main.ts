@@ -80,18 +80,6 @@ let editingParts = false;
 
 // ---------------------------------------------------------------- settings
 
-// Settings saved before the app was renamed: move them over once.
-try {
-  for (const k of Object.keys(localStorage)) {
-    if (!k.startsWith("layerhud.")) continue;
-    const renamed = "cocokey." + k.slice("layerhud.".length);
-    if (localStorage.getItem(renamed) === null) localStorage.setItem(renamed, localStorage.getItem(k)!);
-    localStorage.removeItem(k);
-  }
-} catch {
-  /* storage unavailable */
-}
-
 const store = createStore(() => localStorage);
 
 let showSwitches = store.get("showSwitches", true);
