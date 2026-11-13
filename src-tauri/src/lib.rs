@@ -1,4 +1,5 @@
 mod apps;
+mod autostart;
 mod definitions;
 mod device;
 mod engine;
@@ -110,6 +111,19 @@ fn set_highlight(app: AppHandle, enabled: bool) {
 fn apply_highlight(app: &AppHandle, enabled: bool) {
     app.state::<AppState>().highlight.store(enabled, Ordering::Relaxed);
     let _ = app.emit("hud://highlight", enabled);
+}
+
+/// "Start with Windows" in the settings menu. The registry is the only record,
+/// so the switch also shows a change made in Task Manager.
+#[tauri::command]
+fn autostart_enabled() -> bool {
+    autostart::enabled(&autostart::SYSTEM)
+}
+
+#[tauri::command]
+fn set_autostart(enabled: bool) -> Result<bool, String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    autostart::set(&autostart::SYSTEM, enabled, &exe)
 }
 
 /// Native handle of a window, for the Win32 calls below.
@@ -311,7 +325,9 @@ pub fn run() {
             import_definition,
             set_ignore_configurators,
             set_click_through,
-            set_highlight
+            set_highlight,
+            autostart_enabled,
+            set_autostart
         ])
         .run(tauri::generate_context!())
         .expect("error while running CoCoKey");
