@@ -30,6 +30,7 @@ pub fn open(app: &AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::FILE;
+    use std::path::Path;
 
     fn lock_packages() -> Vec<String> {
         let lock = include_str!("../Cargo.lock");
@@ -53,6 +54,57 @@ mod tests {
         let lines: std::collections::HashSet<&str> = notices.lines().map(str::trim).collect();
         let missing: Vec<String> = lock_packages().into_iter().filter(|p| !lines.contains(p.as_str())).collect();
         assert!(missing.is_empty(), "not in {FILE} (run node tools/third-party-notices.mjs): {missing:?}");
+    }
+
+    #[test]
+    fn each_built_crates_license_text_starts_in_the_notices() {
+        let output = std::process::Command::new("cargo")
+            .args(["metadata", "--format-version", "1", "--offline", "--filter-platform", "x86_64-pc-windows-msvc"])
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .output()
+            .expect("cargo metadata must run to check local license files");
+        assert!(output.status.success(), "cargo metadata failed: {}", String::from_utf8_lossy(&output.stderr));
+        let metadata: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let notices = include_str!("../../THIRD-PARTY-NOTICES.txt");
+        let headings: std::collections::HashSet<&str> = notices.lines().collect();
+        let normalized_notices = notices.split_whitespace().collect::<Vec<_>>().join(" ");
+        let mut checked = 0;
+        for package in metadata["packages"].as_array().unwrap() {
+            let title = format!("{} {}", package["name"].as_str().unwrap(), package["version"].as_str().unwrap());
+            if !headings.contains(title.as_str()) {
+                continue; // Includes crates listed in Cargo.lock but not built for Windows.
+            }
+            let dir = Path::new(package["manifest_path"].as_str().unwrap()).parent().unwrap();
+            let mut files = Vec::new();
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let entry = entry.unwrap();
+                if entry.file_type().unwrap().is_file() && is_license_file(&entry.file_name().to_string_lossy()) {
+                    files.push(entry.path());
+                } else if entry.file_type().unwrap().is_dir() && entry.file_name().to_string_lossy().eq_ignore_ascii_case("LICENSES") {
+                    for nested in std::fs::read_dir(entry.path()).unwrap() {
+                        let nested = nested.unwrap();
+                        if nested.file_type().unwrap().is_file() && ["txt", "md"].contains(&nested.path().extension().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase().as_str()) {
+                            files.push(nested.path());
+                        }
+                    }
+                }
+            }
+            for file in files {
+                let text = std::fs::read_to_string(&file).unwrap();
+                let beginning = text.split_whitespace().take(24).collect::<Vec<_>>().join(" ");
+                assert!(!beginning.is_empty(), "empty license file: {}", file.display());
+                assert!(normalized_notices.contains(&beginning), "{title}: the beginning of {} is missing from {FILE}", file.display());
+                checked += 1;
+            }
+        }
+        assert!(checked > 250, "only {checked} local crate license texts were checked");
+    }
+
+    fn is_license_file(name: &str) -> bool {
+        let lower = name.to_ascii_lowercase();
+        ["license", "licence", "copying", "notice", "copyright", "unlicense"]
+            .iter()
+            .any(|prefix| lower == *prefix || ["-", ".", "_"].iter().any(|separator| lower.starts_with(&format!("{prefix}{separator}"))))
     }
 
     #[test]

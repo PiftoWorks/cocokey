@@ -27,9 +27,11 @@ const APP_CHECK: Duration = Duration::from_secs(2);
 /// device move the cursor unevenly. 40 ms (25 a second) still sees every key
 /// held for 50 ms or longer, e.g. a quick tap of a layer key.
 const POINTER_POLL: Duration = Duration::from_millis(40);
-/// The longest wait between reads while the pointer moves, however slow the
-/// keyboard answers: a key held for 80 ms is always seen.
-const POINTER_POLL_MAX: Duration = Duration::from_millis(75);
+/// The longest scheduled wait from the start of the previous read while the
+/// pointer moves. At most 72 ms allows the next 8 ms round to see an 80 ms
+/// press when a matrix answer takes up to 40 ms. Longer answers can still
+/// block the synchronous worker beyond this limit.
+const POINTER_POLL_MAX: Duration = Duration::from_millis(72);
 /// The pointer counts as moving until it has been still for this long.
 const POINTER_REST: Duration = Duration::from_millis(200);
 /// While the pointer moves, a read also waits this many times as long as the
@@ -879,13 +881,24 @@ mod tests {
         }
     }
 
-    /// Runs the worker's rounds for `ms` milliseconds at the normal pace (one
-    /// round every POLL). `moving(t)` says whether the keyboard's pointer
+    /// Runs the worker's rounds for `ms` milliseconds, sleeping one POLL after
+    /// each round finishes. `moving(t)` says whether the keyboard's pointer
     /// reported movement just before the round at time t; `inspect` sees the
     /// connection after every round.
     fn run(c: &mut Connection, log: &Log, ms: u64, moving: impl Fn(u64) -> bool, inspect: impl FnMut(&Connection)) {
-        let step = POLL.as_millis() as usize;
-        run_at(c, log, (0..ms).step_by(step), moving, inspect);
+        let step = POLL.as_millis() as u64;
+        let mut t = 0;
+        let mut inspect = inspect;
+        while t < ms {
+            log.now_ms.set(t);
+            let now = log.t0 + Duration::from_millis(t);
+            if moving(t) {
+                c.pointer_moved(3, -2, 0, now);
+            }
+            c.poll(now);
+            inspect(c);
+            t = (t + step).max(log.now_ms.get() + step);
+        }
     }
 
     /// Like `run`, with the rounds at the given times (ms), e.g. with a gap
@@ -966,26 +979,27 @@ mod tests {
 
     #[test]
     fn the_wait_after_slow_reads_has_a_ceiling() {
-        // However slow the answers, a read comes at least every POINTER_POLL_MAX
-        // (plus one round), so a key held for 80 ms is still seen.
+        // The scheduled wait has a ceiling, but a 200 ms answer still blocks
+        // the synchronous worker before it can start the next round.
         let log = Rc::new(Log::default());
         log.read_ms.set(200);
         let mut c = connection(log.clone());
         run(&mut c, &log, 2000, |_| true, |_| {});
         let times = log.matrix_requests.borrow().clone();
         let max_gap = times.windows(2).map(|w| w[1] - w[0]).max().unwrap();
-        assert!(max_gap <= 80, "reads {max_gap} ms apart after slow answers");
+        assert!(max_gap >= 208, "reads only {max_gap} ms apart after 200 ms answers");
+        assert!(max_gap <= 216, "reads {max_gap} ms apart after 200 ms answers");
     }
 
     #[test]
     fn slow_reads_do_not_slow_the_resting_pace() {
-        // At rest every round still reads (short taps, TG, OSL), however long
-        // the reads take.
+        // At rest every round reads (short taps, TG, OSL), after the prior
+        // answer and the worker's sleep.
         let log = Rc::new(Log::default());
         log.read_ms.set(40);
         let mut c = connection(log.clone());
         run(&mut c, &log, 1000, |_| false, |_| {});
-        assert_eq!(requests_between(&log, 0, 1000), 125);
+        assert_eq!(requests_between(&log, 0, 1000), 21);
     }
 
     #[test]
@@ -1037,16 +1051,20 @@ mod tests {
         let mut c = connection(log.clone());
         let mut seen = false;
         let step = POLL.as_millis() as u64;
-        for t in (0..1000).step_by(step as usize) {
+        let mut t = 0;
+        let mut previous_round = None;
+        while t < 1000 {
             log.now_ms.set(t);
             let now = log.t0 + Duration::from_millis(t);
             c.pointer_moved(3, -2, 0, now);
             // Raw Input reports the key going down between this round and the previous one.
-            if key_activity && from <= t && from > t.saturating_sub(step) {
+            if key_activity && from <= t && previous_round.is_none_or(|previous| from > previous) {
                 c.key_activity();
             }
             c.poll(now);
             seen |= c.matrix[0] & 1 != 0 && c.engine.layer_state & 0b10 != 0;
+            previous_round = Some(t);
+            t = (t + step).max(log.now_ms.get() + step);
         }
         let gone = c.matrix[0] & 1 == 0 && c.engine.layer_state & 0b10 == 0;
         (seen, gone)
@@ -1063,12 +1081,20 @@ mod tests {
     }
 
     #[test]
-    fn an_80_ms_tap_is_seen_even_when_the_keyboard_answers_slowly() {
-        for from in (400..480).step_by(2) {
-            let (seen, gone) = short_press_while_moving(from, 80, 200, false);
-            assert!(seen, "MO(1) held 80 ms from {from} ms was missed with slow answers");
-            assert!(gone, "MO(1) held 80 ms from {from} ms stayed on");
+    fn an_80_ms_tap_is_seen_with_20_to_40_ms_answers_at_every_phase() {
+        for read_ms in 20..=40 {
+            for from in 400..480 {
+                let (seen, gone) = short_press_while_moving(from, 80, read_ms, false);
+                assert!(seen, "MO(1) held 80 ms from {from} ms was missed with {read_ms} ms answers");
+                assert!(gone, "MO(1) held 80 ms from {from} ms stayed on");
+            }
         }
+    }
+
+    #[test]
+    fn an_80_ms_tap_can_be_missed_with_200_ms_answers() {
+        let missed = (400..600).filter(|&from| !short_press_while_moving(from, 80, 200, false).0).count();
+        assert!(missed > 0, "every 80 ms tap was seen despite 200 ms answers");
     }
 
     #[test]

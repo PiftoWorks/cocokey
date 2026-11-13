@@ -19,11 +19,13 @@ const LICENSE_FILE = /^(licen[cs]e|copying|notice|copyright|unlicense)([-._].*)?
 
 const meta = (filter) =>
   JSON.parse(
-    execFileSync(
+    (process.env.COCOKEY_CARGO_METADATA
+      ? readFileSync(process.env.COCOKEY_CARGO_METADATA, "utf8")
+      : execFileSync(
       "cargo",
       ["metadata", "--format-version", "1", "--offline", "--manifest-path", join(root, "src-tauri", "Cargo.toml"), ...filter],
       { encoding: "utf8", maxBuffer: 256 * 1024 * 1024 },
-    ),
+    )).replace(/^\uFEFF/, ""),
   );
 
 /** Packages actually built for Windows x64, reached from CoCoKey through normal and build dependencies. */
@@ -58,10 +60,17 @@ function lockPackages() {
 }
 
 function licenseFiles(dir) {
-  return readdirSync(dir)
-    .filter((f) => LICENSE_FILE.test(f))
-    .sort()
-    .map((f) => ({ name: f, text: readFileSync(join(dir, f), "utf8").replace(/\r\n/g, "\n").trim() }));
+  const files = readdirSync(dir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && LICENSE_FILE.test(entry.name))
+    .map((entry) => entry.name);
+  const licenses = readdirSync(dir, { withFileTypes: true })
+    .find((entry) => entry.isDirectory() && entry.name.toLowerCase() === "licenses");
+  if (licenses) {
+    files.push(...readdirSync(join(dir, licenses.name), { withFileTypes: true })
+      .filter((entry) => entry.isFile() && /\.(txt|md)$/i.test(entry.name))
+      .map((entry) => join(licenses.name, entry.name)));
+  }
+  return files.sort().map((name) => ({ name: name.replaceAll("\\", "/"), text: readFileSync(join(dir, name), "utf8").replace(/\r\n/g, "\n").trim() }));
 }
 
 const MIT_TERMS = `Permission is hereby granted, free of charge, to any person obtaining a copy
