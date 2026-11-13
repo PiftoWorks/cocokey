@@ -286,7 +286,7 @@ function render() {
       st.notice?.startsWith("definition-missing:") ? t("st.needDefinition").replace("{name}", st.notice.slice(19))
       : st.notice === "configurator-running" ? t("st.vial")
       : st.paused ? t("st.paused")
-      : st.notice && st.notice !== "matrix-locked" ? `${t("st.searching")}\n${st.notice}`
+      // Other notices are connection errors from the app side; they are not shown.
       : t("st.searching");
     board.innerHTML = "";
     $("switches").innerHTML = "";
