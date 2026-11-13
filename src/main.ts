@@ -4,7 +4,7 @@ import { LogicalSize } from "@tauri-apps/api/dpi";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
-import { readAutostart, switchAutostart, type Call } from "./autostart";
+import { AutostartSwitch, type AutostartState, type Call } from "./autostart";
 import { GLOW_CLASS, glowActive, raisePressed, readHighlight, saveHighlight } from "./highlight";
 import { t } from "./i18n";
 import { KC_NO, KC_TRNS, label, switchesOf, type Context, type CustomKeycode, type TapDance } from "./keycodes";
@@ -108,8 +108,8 @@ let keyOpacity = store.get("keyOpacity", 1);
 /** Dim the board and light up only the pressed keys. */
 let highlight = readHighlight(store);
 /** "Start with Windows". Kept by the app side, not in the window's storage. */
-let autostart = false;
 const callApp: Call = (cmd, args) => invoke(cmd, args);
+const autostart = new AutostartSwitch(callApp, showAutostart);
 /** "auto": follow the keyboard typed on last; "tracked": always the Vial keyboard; "standard": always a plain layout. */
 let displayMode = store.get<"auto" | "tracked" | "standard">("displayMode", "auto");
 let standardKind = store.get<StandardKind>("standardKind", "us");
@@ -502,7 +502,7 @@ function buildMenu() {
     ${item("fit", t("menu.fit"))}
     ${item("click", t("menu.click"), "hint.click")}
     ${item("hide", t("menu.hide"), "hint.hide")}
-    ${toggle("m-autostart", autostart, t("menu.autostart"))}`;
+    ${toggle("m-autostart", autostart.state === true, t("menu.autostart"))}`;
   // Filled part of the sliders.
   for (const r of menu.querySelectorAll<HTMLInputElement>('input[type="range"]')) {
     const fill = () => r.style.setProperty("--val", `${((+r.value - +r.min) / (+r.max - +r.min)) * 100}%`);
@@ -567,18 +567,17 @@ function buildMenu() {
   const dev = document.getElementById("m-device") as HTMLSelectElement | null;
   if (dev) dev.onchange = () => invoke("select_device", { path: dev.value });
   const start = $("m-autostart") as HTMLInputElement;
-  start.onchange = async () => {
-    start.disabled = true;
-    showAutostart(await switchAutostart(callApp, start.checked, autostart));
-    start.disabled = false;
-  };
+  start.onchange = () => void autostart.change(start.checked);
+  showAutostart(autostart.state, autostart.busy);
 }
 
-/** "Start with Windows": remember the state read from the app side and show it. */
-function showAutostart(on: boolean) {
-  autostart = on;
+/** "Start with Windows": show the state read from the app side. While it
+ * cannot be read, or a change is on its way, the switch cannot be touched. */
+function showAutostart(state: AutostartState, busy: boolean) {
   const box = document.getElementById("m-autostart") as HTMLInputElement | null;
-  if (box) box.checked = on;
+  if (!box) return;
+  box.checked = state === true;
+  box.disabled = busy || state === null;
 }
 
 /** Shrink or grow the window height so the board fills the width exactly. */
@@ -803,7 +802,7 @@ function toggleMenu(force?: boolean) {
   if (open) buildMenu();
   menu.hidden = !open;
   // Task Manager can change it while the app runs, so read it each time.
-  if (open) readAutostart(callApp).then(showAutostart);
+  if (open) void autostart.refresh();
 }
 
 function startRename() {

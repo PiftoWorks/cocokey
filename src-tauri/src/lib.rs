@@ -115,15 +115,17 @@ fn apply_highlight(app: &AppHandle, enabled: bool) {
 
 /// "Start with Windows" in the settings menu. The registry is the only record,
 /// so the switch also shows a change made in Task Manager.
+/// `Err` when it cannot be read; the window then leaves the switch alone.
 #[tauri::command]
-fn autostart_enabled() -> bool {
-    autostart::enabled(&autostart::SYSTEM)
+fn autostart_enabled() -> Result<bool, String> {
+    autostart::enabled(&autostart::Registry, &autostart::SYSTEM)
 }
 
+/// Returns the state read back afterwards, also when one of the steps failed.
 #[tauri::command]
 fn set_autostart(enabled: bool) -> Result<bool, String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    autostart::set(&autostart::SYSTEM, enabled, &exe)
+    autostart::set(&autostart::Registry, &autostart::SYSTEM, enabled, &exe)
 }
 
 /// Native handle of a window, for the Win32 calls below.
