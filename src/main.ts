@@ -972,7 +972,9 @@ async function main() {
     if (file) await invoke("import_definition", { path: file });
   });
   await listen<{ ok: boolean; id?: string; error?: string }>("hud://import", (e) => {
-    toast(e.payload.ok ? t("import.ok") : `${t("import.failed")}: ${e.payload.error ?? ""}`);
+    // The reason is for the log only; the window says what to do.
+    if (!e.payload.ok) console.error("import failed", e.payload.error);
+    toast(e.payload.ok ? t("import.ok") : t("import.failed"));
   });
   if (ignoreConfigurators) await invoke("set_ignore_configurators", { ignore: true });
   const snap = await invoke<Snapshot>("snapshot");
