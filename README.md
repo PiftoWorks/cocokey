@@ -83,7 +83,10 @@ npm test               # frontend tests
 cd src-tauri && cargo test
 ```
 
-Requires Node.js 20+, Rust 1.85+ and the
+After changing dependencies, run `node tools/third-party-notices.mjs` to
+update `THIRD-PARTY-NOTICES.txt` (a test fails until you do).
+
+Requires Node.js 22 (22.23.4 or later) or 24 (24.22.1 or later), Rust 1.85+ and the
 [Tauri prerequisites](https://tauri.app/start/prerequisites/).
 
 ## How it works
@@ -124,6 +127,9 @@ CoCoKey is released under the [GNU General Public License v3.0](LICENSE).
 The firmware add-on in [`firmware/`](firmware/) is released under the
 [GNU General Public License v2.0 or later](firmware/LICENSE), the same terms as QMK,
 so it can be built into any QMK, VIA or Vial firmware.
+The licenses of the libraries CoCoKey is built with are in
+[`THIRD-PARTY-NOTICES.txt`](THIRD-PARTY-NOTICES.txt), installed next to the
+program and opened from **Licenses** in the tray icon menu.
 
 ---
 
@@ -187,3 +193,5 @@ CoCoKey は [GNU General Public License v3.0](LICENSE) で公開しています�
 [`firmware/`](firmware/) のファームウェア用の追加部品は、QMK と同じ
 [GNU General Public License v2.0 以降](firmware/LICENSE) です。QMK / VIA / Vial の
 ファームウェアにそのまま組み込めます。
+CoCoKey に組み込んでいるライブラリのライセンスは [`THIRD-PARTY-NOTICES.txt`](THIRD-PARTY-NOTICES.txt) にあり、
+タスクトレイのメニューの「ライセンス」から開けます。
