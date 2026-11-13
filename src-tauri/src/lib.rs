@@ -286,6 +286,9 @@ pub fn run() {
                     pointer::RawEvent::PointerMoved(dx, dy, dw) => {
                         let _ = pointer_tx.send(Control::PointerMoved(dx, dy, dw));
                     }
+                    pointer::RawEvent::TrackedKey => {
+                        let _ = pointer_tx.send(Control::KeyActivity);
+                    }
                     pointer::RawEvent::TypingOn(tracked) => {
                         let _ = emitter.emit("hud://typing", tracked);
                     }

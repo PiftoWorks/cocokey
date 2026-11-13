@@ -94,10 +94,12 @@ CoCoKey talks to the keyboard over the VIA raw HID interface
 1. reads the layer count, the keymap, the tap dance table and the tapping term;
 2. downloads the keyboard definition that Vial stores in the firmware
    (matrix size and physical layout);
-3. polls the switch matrix about 120 times a second (about 10 times a second,
-   or less when the keyboard is slow to answer, while the keyboard's own
-   trackball or trackpoint is moving, so the keyboard is not kept busy
-   answering) and replays the layer keycodes with the same rules QMK/Vial use.
+3. polls the switch matrix about 120 times a second and replays the layer
+   keycodes with the same rules QMK/Vial use. While the keyboard's own
+   trackball or trackpoint is moving, it polls about 25 times a second (at
+   least about 13 times a second when the keyboard is slow to answer), so the
+   keyboard is not kept busy answering; a key that sends input to the PC is
+   read at once.
 
 ## Privacy
 

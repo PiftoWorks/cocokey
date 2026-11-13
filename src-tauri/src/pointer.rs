@@ -30,6 +30,9 @@ pub enum RawEvent {
     PointerMoved(i32, i32, i32),
     /// The keyboard typed on last changed (`true` = the tracked keyboard).
     TypingOn(bool),
+    /// A key or mouse button of the tracked keyboard went down (no key codes
+    /// are passed on; it only tells the worker to read the matrix now).
+    TrackedKey,
     /// Scan codes held on other keyboards (0xE0 prefix folded into the high byte).
     OtherKeys(Vec<u16>),
     /// Esc was pressed on any keyboard (closes the HUD's temporary modes even
@@ -187,8 +190,19 @@ mod imp {
             let mouse = raw.data.mouse;
             let flags = mouse.Anonymous.Anonymous.usButtonFlags as u32;
             let moved = mouse.lLastX != 0 || mouse.lLastY != 0 || flags & (RI_MOUSE_WHEEL | RI_MOUSE_HWHEEL) != 0;
+            // Left, right, middle, 4th and 5th button down.
+            const BUTTON_DOWN: u32 = 0x0001 | 0x0004 | 0x0010 | 0x0040 | 0x0100;
+            if !moved && flags & BUTTON_DOWN == 0 {
+                return;
+            }
+            if ctx.is_target(raw.header.hDevice) != Some(true) {
+                return;
+            }
+            if flags & BUTTON_DOWN != 0 {
+                (ctx.sink)(RawEvent::TrackedKey);
+            }
             let pointer_enabled = ctx.target.lock().unwrap().is_some_and(|t| t.pointer);
-            if !moved || !pointer_enabled || ctx.is_target(raw.header.hDevice) != Some(true) {
+            if !moved || !pointer_enabled {
                 return;
             }
             // Relative counts, as the firmware sees them (auto mouse thresholds).
@@ -225,6 +239,9 @@ mod imp {
                 (ctx.sink)(RawEvent::TypingOn(on_target));
             }
             if on_target {
+                if flags & RI_KEY_BREAK == 0 {
+                    (ctx.sink)(RawEvent::TrackedKey);
+                }
                 return;
             }
             // Pause arrives as an E1-prefixed sequence; give it its own code.
