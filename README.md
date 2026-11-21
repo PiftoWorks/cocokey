@@ -15,7 +15,8 @@ configure: plug in a Vial or VIA keyboard and the HUD draws it.
   their firmware. VIA keyboards (including ones set up with Remap) use VIA's
   public definition catalog, or a definition file you drop on the window.
 - **Plain keyboards too** — when you type on an ordinary keyboard the HUD
-  switches to a standard US or JIS layout and shows Shift and held keys.
+  switches to a standard US or JIS layout (chosen in the settings) and shows
+  Shift and held keys.
 - **Macros** — shows what every macro does, on the keys and in a full list.
 - **How to switch** — lists every key on the current layer that changes the
   layer, including each tap dance gesture (tap / hold / double tap).
@@ -119,7 +120,13 @@ CoCoKey talks to the keyboard over the VIA raw HID interface
 - Layer tracking by key presses is a replay. Combos, key overrides and custom
   firmware code that change layers are not seen. Use the firmware extension for
   exact tracking.
-- Labels assume a US keyboard layout in the operating system.
+- On Vial and VIA keyboards, each key is labeled with the character it types
+  when the Windows keyboard layout is set to US. CoCoKey does not read the
+  Windows keyboard layout setting, so with another layout (such as JIS) some
+  symbol keys type a different character than the label shows.
+- Ordinary keyboards are drawn as US or JIS, whichever you choose in
+  **Standard layout** in the settings (US at first). This does not follow the
+  Windows setting either.
 
 ## License
 
@@ -142,7 +149,7 @@ CoCoKey（ココキー）は、キーボードがいまどのレイヤーにい�
 - VIA 対応キーボード（Remap で設定するものを含む）は、VIA の公開カタログから配置データを
   自動で取得します。カタログにないものは、定義ファイル（VIA 形式の JSON）を
   ウィンドウにドラッグ＆ドロップしてください。古い QMK のファームウェアにも対応しています。
-- 普通のキーボードで打つと、標準配列（US / JIS）の表示に切り替わります。
+- 普通のキーボードで打つと、標準配列（US / JIS。設定で選びます）の表示に切り替わります。
 - キーの押下からレイヤーの切り替え（MO / TO / TG / OSL / TT / LT / DF /
   タップダンス）を追跡します。ファームウェアに[小さな追加](docs/firmware-layer-report.md)
   をすると、キーボードから正確なレイヤーを受け取れます。
@@ -185,7 +192,11 @@ CoCoKey（ココキー）は、キーボードがいまどのレイヤーにい�
 
 - キーの押下から再現しているため、コンボ・キーオーバーライド・独自のファームウェアのコードによる
   レイヤーの切り替えは追えません。正確に追うにはファームウェアの追加部品を使ってください。
-- キーの表示は、Windows のキーボードの設定が US 配列であることを前提にしています。
+- Vial・VIA のキーボードのキーの文字は、Windows のキーボードの設定が US 配列のときの文字で表示します。
+  CoCoKey は Windows のキーボードの配列の設定を読まないため、JIS などの設定で使うと、
+  記号のキーで表示と実際に入力される文字が違うことがあります。
+- 普通のキーボードの表示は、設定の「標準の配列」で US / JIS を選びます（最初は US）。
+  こちらも Windows の設定には合わせません。
 
 ## ライセンス
 
